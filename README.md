@@ -25,7 +25,7 @@ npm start
 
 ## Oyun
 
-1. Sunucu soru kütüphanesinden seti düzenler ve **Seti kaydet** der. Hazır havuzda 24 harf için 264 soru vardır. Kendi havuzuna 300 soru ve 64 farklı harfe kadar ekleyebilirsin.
+1. Sunucu soru kütüphanesinden seti düzenler ve **Seti kaydet** der. Hazır havuzda 24 harf için 264 İngilizce soru vardır; cevaplar, açıklamalar ve kategoriler de İngilizcedir. Kendi havuzuna 300 soru ve 64 farklı harfe kadar ekleyebilirsin.
 2. Oyuncular oda bağlantısından katılır. Sunucu **Oyunu başlat** der.
 3. Üç saniyelik hazırlıktan sonra soru açılır. Buzzer’a ilk basan söz hakkını alır. Basışlar sunucuya ulaşma sırasına göre dizilir; ilk oyuncu için 150 ms toplama aralığı vardır. İstemcinin gönderdiği zaman damgasına güvenilmez.
 4. Her söz hakkında **10 saniye** başlar. Oyuncu cevabı toplantıda veya aynı odada sesli söyler. Uygulama sesli görüşme sağlamaz.
@@ -41,6 +41,8 @@ npm start
 **Oyunu başlat** düğmesi, her harf için kullanılmamış sorulardan rastgele birini seçer. Harfler çark sırasıyla oynanır. Son soru doğru cevaplandığında veya pas geçildiğinde çarkın tüm soruları geçmişe yazılır. Yarım kalan oyunlar soru tüketmez.
 
 Geçmiş, bu sunucudaki odalar için ortaktır ve `.vigola-data/used-questions.json` dosyasında saklanır. Sunucuyu yeniden başlatmak geçmişi sıfırlamaz. Dağıtımda geçmişi korumak için bu klasörü kalıcı diskte tut. Herhangi bir harfin soruları tükenirse o harfe yeni soru eklemek gerekir. Oyuna başlamadan soru kütüphanesindeki **Hazır havuzu kullan** düğmesiyle kayıtlı özel setinden hazır havuza dönebilirsin.
+
+Hazır havuz, pratik senaryolar ve kavram sorularıyla İngilizce olarak yeniden hazırlanmıştır. Her harf için 11 farklı cevap vardır; İngilizce terimler için `İ` yerine `I` kullanılır. Arayüz ve zorluk etiketleri Türkçedir. Güncellemeyi almak için sunucuyu yeniden başlat; tarayıcıda eski bir set kaydettiysen lobide **Soruları düzenle → Hazır havuzu kullan** seçeneğini kullan. Devam eden odaların seti otomatik değişmez.
 
 ## Oyun masası ve tema
 

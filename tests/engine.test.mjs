@@ -159,13 +159,21 @@ test('completed-question feed reveals only resolved questions', () => {
  assert.equal(JSON.stringify(state.completed).includes('Binary search'), false);
 });
 
-test('the built-in pool has 11 distinct questions for each of the 24 letters', () => {
+test('the English pool has 11 distinct answers per letter and matching answer initials', () => {
  const pool = validateBank(questionPool);
  assert.equal(pool.length, 264);
+ assert.deepEqual(questions.map(question => question.letter), [...'ABCDEFGHIJKLMNOPRSTUVWYZ']);
  for (const { letter } of questions) {
   const group = pool.filter(question => question.letter === letter);
   assert.equal(group.length, 11);
-  assert.equal(new Set(group.map(question => question.answer)).size, 11);
+  assert.equal(new Set(group.map(question => question.answer.toLowerCase())).size, 11);
+  for (const question of group) {
+   assert.equal(question.answer[0].toUpperCase(), letter, question.answer);
+   for (const field of ['category', 'text', 'answer', 'explanation']) {
+    assert.ok(question[field].length > 0, `${question.answer}: missing ${field}`);
+    assert.doesNotMatch(question[field], /[çğıöşüÇĞİÖŞÜ]/u, `${question.answer}: ${field}`);
+   }
+  }
  }
 });
 
