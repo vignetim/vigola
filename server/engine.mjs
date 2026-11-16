@@ -1,6 +1,7 @@
 import { ANSWER_SECONDS } from '../lib/game-rules.mjs';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { questionPool } from '../lib/questions.mjs';
+import { canonicalQuestionText, questionPoolForLanguage, validateLanguage } from '../lib/question-locales.mjs';
 
 export const MAX_POOL_QUESTIONS = 300;
 
@@ -11,12 +12,29 @@ export function validateBank(value) {
   return v.trim();
  };
  const number = (v, min, max) => { if (!Number.isFinite(v) || v < min || v > max) throw new Error('Puan ve katsayı aralığını kontrol et.'); return v; };
- const bank = value.map(q => ({
-  id: createHash('sha256').update(text(q?.text, 1200).normalize('NFC').replace(/\s+/g, ' ').toLocaleLowerCase('tr')).digest('hex'), letter: text(q.letter, 2).toLocaleUpperCase('tr'), category: text(q.category, 60),
-  text: text(q.text, 1200), answer: text(q.answer, 200), explanation: text(q.explanation ?? '', 1500, false), code: text(q.code ?? '', 2000, false),
+ const bank = value.map(q => {
+  const answer = text(q?.answer, 200);
+  let choices;
+  if (q.choices !== undefined) {
+   if (!Array.isArray(q.choices) || q.choices.length < 2 || q.choices.length > 6) throw new Error('Her soruya 2–6 seçenek ekle.');
+   choices = q.choices.map(choice => {
+    const option = { id: text(choice?.id, 100), text: text(choice?.text, 200) };
+    if (choice.weight !== undefined) {
+     option.weight = number(choice.weight, -1000, 1000);
+     if ((option.text === answer && option.weight < 0) || (option.text !== answer && option.weight > 0)) throw new Error('Doğru seçeneğin ağırlığı sıfır veya pozitif, yanlışların ağırlığı sıfır veya negatif olmalı.');
+    }
+    return option;
+   });
+   if (new Set(choices.map(choice => choice.id)).size !== choices.length || new Set(choices.map(choice => choice.text.normalize('NFC').toLowerCase())).size !== choices.length) throw new Error('Seçeneklerin kimlikleri ve metinleri farklı olmalı.');
+   if (choices.filter(choice => choice.text === answer).length !== 1) throw new Error('Doğru cevap seçeneklerden tam biriyle eşleşmeli.');
+  }
+  return {
+  id: createHash('sha256').update(canonicalQuestionText(text(q?.text, 1200), answer).normalize('NFC').replace(/\s+/g, ' ').toLocaleLowerCase('tr')).digest('hex'), letter: text(q.letter, 2).toLocaleUpperCase('tr'), category: text(q.category, 60),
+  text: text(q.text, 1200), answer, explanation: text(q.explanation ?? '', 1500, false), code: text(q.code ?? '', 2000, false),
   difficulty: ['Kolay', 'Orta', 'Zor'].includes(q.difficulty) ? q.difficulty : 'Orta',
   points: number(q.points, 1, 1000), penalty: number(q.penalty, 0, 1000), multiplier: number(q.multiplier, 0.5, 5),
- }));
+  ...(choices ? { choices } : {}),
+ }; });
  if (new Set(bank.map(q => q.id)).size !== bank.length) throw new Error('Aynı soru havuza birden fazla kez eklenemez.');
  if (new Set(bank.map(q => q.letter)).size > 64) throw new Error('Çarkta en fazla 64 farklı harf olabilir.');
  return bank;
@@ -31,6 +49,33 @@ function groupByLetter(pool) {
  return [...groups.values()];
 }
 
+function shuffled(items) {
+ const copy = [...items];
+ for (let index = copy.length - 1; index > 0; index--) {
+  const other = randomInt(index + 1);
+  [copy[index], copy[other]] = [copy[other], copy[index]];
+ }
+ return copy;
+}
+
+function withChoices(question, pool) {
+ if (question.choices) return question;
+ const seen = new Set([question.answer.normalize('NFC').toLowerCase()]);
+ const answers = [];
+ const candidates = [...pool, ...questionPool];
+ // Prefer the same initial so the wheel letter never gives away the answer.
+ for (const sameLetter of [true, false]) {
+  for (const candidate of shuffled(candidates.filter(candidate => (candidate.letter === question.letter) === sameLetter))) {
+   const key = candidate.answer.normalize('NFC').toLowerCase();
+   if (seen.has(key)) continue;
+   seen.add(key); answers.push(candidate.answer);
+   if (answers.length === 3) break;
+  }
+  if (answers.length === 3) break;
+ }
+ return { ...question, choices: shuffled([question.answer, ...answers]).map(text => ({ id: randomBytes(12).toString('hex'), text })) };
+}
+
 export class Engine {
  constructor(now = Date.now, { usedQuestions = new Set(), saveUsedQuestions = () => {} } = {}) {
   this.rooms = new Map();
@@ -38,8 +83,9 @@ export class Engine {
   this.usedQuestions = usedQuestions;
   this.saveUsedQuestions = saveUsedQuestions;
  }
- setPool(room, pool = questionPool) {
-  room.pool = validateBank(pool);
+ setPool(room, pool = questionPoolForLanguage(room.language)) {
+  const validated = validateBank(pool);
+  room.pool = room.mode === 'multiple-choice' ? validated.map(question => withChoices(question, validated)) : validated;
   room.bank = groupByLetter(room.pool).map(([first]) => first);
  }
  recordCompletedWheel(room) {
@@ -49,11 +95,13 @@ export class Engine {
   this.saveUsedQuestions(used);
   this.usedQuestions = used;
  }
- create(pool) {
+ create(pool, mode = 'buzzer', language = 'en') {
+  validateLanguage(language);
+  if (!['buzzer', 'multiple-choice'].includes(mode)) throw new Error('Geçerli bir oyun modu seç.');
   if (this.rooms.size >= 200) throw new Error('Şu an çok fazla oda var. Biraz sonra tekrar dene.');
   let code; const alphabet = 'ABCDEFGHJKLMNPRSTUVYZ';
   do { code = Array.from({ length: 6 }, () => alphabet[randomInt(alphabet.length)]).join(''); } while (this.rooms.has(code));
-  const room = { code, token: randomBytes(24).toString('hex'), players: new Map(), watchers: new Map(), viewerSequence: 0, phase: 'lobby', index: 0, queue: [], locked: new Set(), deadline: null, revealAt: null, settleAt: null, result: null, history: [], events: [], updatedAt: this.now() };
+  const room = { code, mode, language, token: randomBytes(24).toString('hex'), players: new Map(), watchers: new Map(), viewerSequence: 0, phase: 'lobby', index: 0, queue: [], locked: new Set(), deadline: null, revealAt: null, settleAt: null, result: null, submissions: new Map(), choiceResults: [], completedChoices: new Map(), history: [], events: [], updatedAt: this.now() };
   this.setPool(room, pool);
   this.rooms.set(code, room); this.event(room, 'Oda hazır. Ekibini davet et!', 'info'); return room;
  }
@@ -72,6 +120,7 @@ export class Engine {
   r.watchers.set(socketId, watcher); r.updatedAt = this.now(); return watcher;
  }
  hostBuzz(r, socketId, credential) {
+  if (r.mode !== 'buzzer') throw new Error('Bu odada cevap vermek için bir seçenek seç.');
   if (!['open', 'answering'].includes(r.phase)) throw new Error('Soru açılınca basabilirsin.');
   let p = credential && [...r.players.values()].find(candidate => candidate.token === credential);
   if (!p) {
@@ -90,16 +139,20 @@ export class Engine {
     const letter = r.bank[exhausted].letter;
     throw new Error(letter + ' harfi için kullanılmamış soru kalmadı. Soru kütüphanesine yeni bir soru ekle.');
    }
-   r.bank = groups.map(group => group[randomInt(group.length)]);
+   r.bank = groups.map(group => {
+    const question = group[randomInt(group.length)];
+    return r.mode === 'multiple-choice' ? { ...question, choices: shuffled(question.choices) } : question;
+   });
   }
   if (r.phase === 'resolved') {
    if (r.index >= r.bank.length - 1) { r.phase = 'final'; this.event(r, 'Oyun bitti. Alkışlar bütün ekibe!', 'correct'); return true; }
    r.index++;
   }
-  r.phase = 'countdown'; r.revealAt = this.now() + 3000; r.deadline = null; r.settleAt = null; r.queue = []; r.locked = new Set(); r.result = null;
+  r.phase = 'countdown'; r.revealAt = this.now() + 3000; r.deadline = null; r.settleAt = null; r.queue = []; r.locked = new Set(); r.result = null; r.submissions = new Map(); r.choiceResults = [];
   this.event(r, `${r.bank[r.index].letter} harfi geliyor.`, 'info'); return true;
  }
  buzz(r, p) {
+  if (r.mode !== 'buzzer') throw new Error('Bu odada cevap vermek için bir seçenek seç.');
   const now = this.now();
   if (r.phase === 'countdown') { p.blockedUntil = now + 1500; throw new Error('Erken bastın. 1,5 saniye bekle.'); }
   if (!['open', 'answering'].includes(r.phase)) throw new Error('Buzzer henüz açık değil.');
@@ -119,6 +172,7 @@ export class Engine {
   } else { r.phase = 'open'; r.deadline = null; }
  }
  judge(r, correct, timeout = false) {
+  if (r.mode !== 'buzzer') return false;
   if (r.phase !== 'answering' || !r.queue.length) return false;
   if (!timeout && this.now() >= r.deadline) return this.judge(r, false, true);
   const head = r.queue[0]; const p = r.players.get(head.id); const q = r.bank[r.index];
@@ -132,11 +186,53 @@ export class Engine {
   return true;
  }
  pass(r) {
+  if (r.mode !== 'buzzer') return false;
   if (!['open', 'answering'].includes(r.phase)) return false;
   this.recordCompletedWheel(r);
   r.history.push({ letter: r.bank[r.index].letter, status: 'passed' });
   r.phase = 'resolved'; r.queue = []; r.deadline = null; r.settleAt = null;
   this.event(r, `${r.bank[r.index].letter} harfi pas geçildi.`, 'info'); return true;
+ }
+ submitChoice(r, p, questionId, choiceId) {
+  if (r.mode !== 'multiple-choice') throw new Error('Bu oda çoktan seçmeli modda değil.');
+  if (!p || r.players.get(p.id) !== p) throw new Error('Önce oyuna katıl.');
+  if (r.phase !== 'open') throw new Error('Şu anda cevap gönderilemez.');
+  const question = r.bank[r.index];
+  if (questionId !== question.id) throw new Error('Bu soru artık aktif değil.');
+  if (!question.choices.some(choice => choice.id === choiceId)) throw new Error('Geçerli bir seçenek seç.');
+  if (r.submissions.has(p.id)) throw new Error('Cevabın kaydedildi; bu soruda tekrar seçemezsin.');
+  r.submissions.set(p.id, choiceId);
+  r.updatedAt = this.now();
+  return true;
+ }
+ revealChoices(r, questionId) {
+  if (r.mode !== 'multiple-choice') throw new Error('Bu oda çoktan seçmeli modda değil.');
+  if (questionId !== r.bank[r.index].id) throw new Error('Bu soru artık aktif değil.');
+  if (r.phase !== 'open') return false;
+  const question = r.bank[r.index];
+  const results = [...r.players.values()].map(player => {
+   const choiceId = r.submissions.get(player.id);
+   const choice = question.choices.find(option => option.id === choiceId);
+   if (!choice) return { id: player.id, choiceId: null, correct: null, delta: 0 };
+   const correct = choice.text === question.answer;
+   const weight = choice.weight ?? (correct ? question.points : -question.penalty);
+   const delta = Math.sign(weight) * Math.round(Math.abs(weight) * question.multiplier);
+   return { id: player.id, choiceId, correct, delta };
+  });
+  // Persist first: a disk failure must not leave a partially scored final round.
+  this.recordCompletedWheel(r);
+  for (const result of results) {
+   if (result.correct === null) continue;
+   const player = r.players.get(result.id);
+   player.score += result.delta;
+   player[result.correct ? 'correct' : 'wrong']++;
+  }
+  r.choiceResults = results;
+  r.completedChoices.set(r.index, results);
+  r.history.push({ letter: question.letter, status: results.some(result => result.correct) ? 'correct' : 'passed' });
+  r.phase = 'resolved'; r.deadline = null; r.settleAt = null; r.queue = [];
+  this.event(r, `${question.letter} harfinin cevapları açıldı.`, 'info');
+  return true;
  }
  tick() {
   const changed = [];
@@ -149,12 +245,15 @@ export class Engine {
   return [...new Set(changed)];
  }
  state(r) {
-  const { answer, explanation, ...question } = r.bank[r.index];
+  const { answer, explanation, choices, ...question } = r.bank[r.index];
   const hidden = ['lobby', 'countdown'].includes(r.phase);
-  return { code: r.code, phase: r.phase, index: r.index, total: r.bank.length, letters: r.bank.map(q => q.letter),
+  const revealed = ['resolved', 'final'].includes(r.phase);
+  const publicChoices = r.mode === 'multiple-choice' && !hidden ? { choices: choices.map(choice => revealed ? { ...choice } : { id: choice.id, text: choice.text }) } : {};
+  return { code: r.code, mode: r.mode, language: r.language, phase: r.phase, index: r.index, total: r.bank.length, letters: r.bank.map(q => q.letter),
    watchers: [...r.watchers.values()],
-   completed: r.history.map((entry, index) => ({ ...r.bank[index], index, status: entry.status })),
-   question: { ...question, ...(hidden ? { text: '', code: '' } : {}), ...(['resolved', 'final'].includes(r.phase) ? { answer, explanation } : {}) },
+   completed: r.history.map((entry, index) => ({ ...r.bank[index], index, status: entry.status, ...(r.mode === 'multiple-choice' ? { choiceResults: r.completedChoices.get(index) || [] } : {}) })),
+   question: { ...question, ...publicChoices, ...(hidden ? { text: '', code: '' } : {}), ...(revealed ? { answer, explanation } : {}) },
+   submitted: [...r.submissions.keys()], choiceResults: revealed ? r.choiceResults : [],
    players: [...r.players.values()].map(({ id, name, score, sockets, correct, wrong }) => ({ id, name, score, correct, wrong, connected: !!sockets.size })),
    queue: r.settleAt ? [] : r.queue, pending: !!r.settleAt, locked: [...r.locked], deadline: r.deadline, revealAt: r.revealAt, result: r.result, history: r.history, events: r.events };
  }

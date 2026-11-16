@@ -18,6 +18,9 @@ const engine = new Engine(Date.now, loadQuestionHistory());
 const hostChannel = room => room.code + ':host';
 const broadcast = room => {
  io.to(hostChannel(room)).emit('host:question', { code: room.code, question: room.bank[room.index] });
+ for (const player of room.players.values()) {
+  for (const socketId of player.sockets) io.to(socketId).emit('player:answer', { code: room.code, questionId: room.bank[room.index].id, choiceId: room.submissions?.get(player.id) ?? null });
+ }
  io.to(room.code).emit('state', engine.state(room));
 };
 const creationLimits = new Map();
@@ -50,15 +53,15 @@ io.on('connection', socket => {
   const key = socket.handshake.address; const recent = (creationLimits.get(key) || []).filter(t => Date.now() - t < 60000);
   if (recent.length >= 12) throw new Error('Yeni oda açmadan önce bir dakika bekle.');
   recent.push(Date.now()); creationLimits.set(key, recent);
-  const created = engine.create(data.bank); leave(); room = created; host = true; socket.join([room.code, hostChannel(room)]);
-  return { code: room.code, token: room.token, bank: room.pool };
+  const created = engine.create(data.bank, data.mode, data.language); leave(); room = created; host = true; socket.join([room.code, hostChannel(room)]);
+  return { code: room.code, token: room.token, bank: room.pool, mode: room.mode, language: room.language };
  });
  on('host:resume', ({ code, token, playerToken }) => {
   const r = engine.rooms.get(String(code)); if (!r || r.token !== token) throw new Error('Oda oturumu sona ermiş. Yeni oda oluşturabilirsin.');
   leave(); room = r; host = true; socket.join([r.code, hostChannel(r)]);
   player = playerToken && [...r.players.values()].find(p => p.token === playerToken);
   if (player) player.sockets.add(socket.id);
-  return { bank: r.pool, ...(player ? { id: player.id, playerToken: player.token, name: player.name } : {}) };
+  return { bank: r.pool, mode: r.mode, language: r.language, ...(player ? { id: player.id, playerToken: player.token, name: player.name } : {}) };
  });
  on('host:buzz', hostOnly(({ playerToken }) => {
   const p = engine.hostBuzz(room, socket.id, player?.token || playerToken); player = p;
@@ -71,6 +74,7 @@ io.on('connection', socket => {
   engine.judge(room, correct);
  }));
  on('host:pass', hostOnly(() => { engine.pass(room); }));
+ on('host:reveal', hostOnly(({ questionId }) => { engine.revealChoices(room, questionId); }));
  on('host:bank', hostOnly(({ bank }) => {
   if (room.phase !== 'lobby') throw new Error('Sorular yalnızca oyun başlamadan değiştirilebilir.');
   engine.setPool(room, bank ?? undefined);
@@ -87,6 +91,11 @@ io.on('connection', socket => {
   leave(); room = r; socket.join(r.code); engine.watch(r, socket.id, name);
  });
  on('buzz', () => { if (!room || !player) throw new Error('Önce oyuna katıl.'); engine.buzz(room, player); });
+ on('answer', ({ questionId, choiceId }) => {
+  if (!room || !player) throw new Error('Önce oyuna katıl.');
+  engine.submitChoice(room, player, questionId, choiceId);
+  return { questionId, choiceId };
+ });
  socket.on('disconnect', leave);
 });
 const timer = setInterval(() => { for (const room of engine.tick()) broadcast(room); }, 40);

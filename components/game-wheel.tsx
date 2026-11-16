@@ -9,9 +9,10 @@ type Props = {
   phase: GameState['phase'];
   seconds: number;
   countdown: number;
+  multipleChoice?: boolean;
 };
 
-export default function GameWheel({ letters, letter, history, phase, seconds, countdown }: Props) {
+export default function GameWheel({ letters, letter, history, phase, seconds, countdown, multipleChoice = false }: Props) {
   const circumference = 2 * Math.PI * 190;
   const answering = phase === 'answering';
 
@@ -39,7 +40,7 @@ export default function GameWheel({ letters, letter, history, phase, seconds, co
       <div className="wheel-center" aria-hidden="true">
         <span>{phase === 'countdown' ? 'HAZIR OL' : answering ? 'CEVAP SÜRESİ' : 'BU HARFLE BAŞLIYOR'}</span>
         <strong key={phase === 'countdown' ? countdown : letter}>{phase === 'countdown' ? countdown : letter}</strong>
-        {answering ? <div className="wheel-seconds"><Timer size={18} /><b>{String(seconds).padStart(2, '0')}</b><span>sn</span></div> : <small>{phase === 'lobby' ? 'Yazılım passaparolası' : phase === 'countdown' ? 'Parmaklar butonlarda' : 'Düşün. Bas. Cevapla.'}</small>}
+        {answering ? <div className="wheel-seconds"><Timer size={18} /><b>{String(seconds).padStart(2, '0')}</b><span>sn</span></div> : <small>{multipleChoice ? phase === 'countdown' ? 'Soruyu okumaya hazırlan' : 'Düşün. Seç. Sonucu gör.' : phase === 'lobby' ? 'Yazılım passaparolası' : phase === 'countdown' ? 'Parmaklar butonlarda' : 'Düşün. Bas. Cevapla.'}</small>}
       </div>
     </div>
   );

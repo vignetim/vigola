@@ -3,12 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { ArrowRight, AudioLines, Check, CheckCheck, ChevronRight, CircleHelp, Copy, ExternalLink, Gamepad2, LoaderCircle, Plus, ShieldCheck, Sparkles, Trophy, Users, Volume2, VolumeX, X, Zap } from 'lucide-react';
-import type { GameState, Player, Question } from '@/lib/types';
+import type { Choice, GameMode, GameState, Player, Question, QuestionLanguage } from '@/lib/types';
 import { ANSWER_SECONDS } from '@/lib/game-rules.mjs';
+import { bankStorageKeys, savedBankForLanguage } from '@/lib/room-preferences.mjs';
+import { questionMatchesSearch } from '@/lib/question-search.mjs';
 import GameWheel from './game-wheel';
 import ThemeToggle from './theme-toggle';
 
-type Reply = { ok: boolean; error?: string; code?: string; token?: string; id?: string; name?: string; bank?: Question[]; playerToken?: string; now?: number };
+type Reply = { ok: boolean; error?: string; code?: string; token?: string; id?: string; name?: string; bank?: Question[]; mode?: GameMode; language?: QuestionLanguage; playerToken?: string; now?: number; questionId?: string; choiceId?: string };
+type SavedAnswer = { code: string; questionId: string; choiceId: string | null };
 const letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'S', 'T', 'U', 'V', 'W', 'Y', 'Z'];
 const preview = { letter: 'A', category: 'Web development', difficulty: 'Kolay', text: 'A weather app requests forecasts from another service through a documented interface. What three-letter term names that interface?', points: 100, penalty: 25, multiplier: 1 };
 const read = (key: string) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
@@ -38,6 +41,10 @@ export default function Game() {
  const [muted, setMuted] = useState(false);
  const [selected, setSelected] = useState(0);
  const [search, setSearch] = useState('');
+ const [newMode, setNewMode] = useState<GameMode>('buzzer');
+ const [newLanguage, setNewLanguage] = useState<QuestionLanguage>('tr');
+ const [savedAnswer, setSavedAnswer] = useState<SavedAnswer | null>(null);
+ const [submitting, setSubmitting] = useState(false);
  const notify = useCallback((message: string) => setToast(message), []);
  const send = useCallback((event: string, data: unknown = {}): Promise<Reply> => new Promise(resolve => {
   if (!socket.current?.connected) { notify('Bağlantı kuruluyor. Biraz sonra tekrar dene.'); resolve({ ok: false }); return; }
@@ -48,13 +55,15 @@ export default function Game() {
   });
  }), [notify]);
 
- const create = useCallback(async () => {
+ const create = useCallback(async (mode: GameMode, language: QuestionLanguage) => {
   setBusy(true);
-  const bank = read('vigola-use-default-pool') ? undefined : read('vigola-bank') || undefined;
-  const result = await send('host:create', { bank });
+  const bank = savedBankForLanguage(read, language);
+  const result = await send('host:create', { bank, mode, language });
   if (result.ok) {
    save('vigola-host', { code: result.code, token: result.token }); setBank(result.bank || []);
-   setRole('host'); setPid(''); setModal(null);
+   setRole('host'); setPid(''); setSavedAnswer(null); setSelected(0); setSearch(''); setModal(null);
+   save('vigola-mode', mode);
+   save('vigola-language', language);
    history.replaceState(null, '', '/');
   }
   setBusy(false);
@@ -77,17 +86,19 @@ export default function Game() {
     }
    } else {
     const saved = read('vigola-host');
-    if (saved) { const r = await send('host:resume', saved); if (r.ok) { setBank(r.bank || []); setRole('host'); if (r.id) setPid(r.id); } else await create(); }
-    else await create();
+    const showSetup = () => { setRole('host'); setNewMode(read('vigola-mode') === 'multiple-choice' ? 'multiple-choice' : 'buzzer'); setNewLanguage(read('vigola-language') === 'en' ? 'en' : 'tr'); setModal('new'); };
+    if (saved) { const r = await send('host:resume', saved); if (r.ok) { setBank(r.bank || []); setNewMode(r.mode || 'buzzer'); setNewLanguage(r.language || 'en'); setRole('host'); if (r.id) setPid(r.id); } else showSetup(); }
+    else showSetup();
    }
   });
   s.on('disconnect', () => setConnected(false));
   s.on('host:question', setPrivateQuestion);
   s.on('host:pool', setBank);
+  s.on('player:answer', setSavedAnswer);
   s.on('state', (value: GameState) => setState(value));
   s.connect();
   return () => { s.disconnect(); socket.current = null; };
- }, [send, create]);
+ }, [send]);
  useEffect(() => { const id = setInterval(() => setNow(Date.now() + offset), 80); return () => clearInterval(id); }, [offset]);
  useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(''), 4000); return () => clearTimeout(id); }, [toast]);
  useEffect(() => {
@@ -98,7 +109,7 @@ export default function Game() {
   const first = el?.querySelector<HTMLElement>('input') || el?.querySelector<HTMLElement>(selector);
   first?.focus();
   const onKey = (e: KeyboardEvent) => {
-   if (e.key === 'Escape') setModal(null);
+   if (e.key === 'Escape' && (state || modal !== 'new')) setModal(null);
    if (e.key !== 'Tab' || !el) return;
    const items = Array.from(el.querySelectorAll<HTMLElement>(selector));
    const firstItem = items[0]; const lastItem = items[items.length - 1];
@@ -107,11 +118,15 @@ export default function Game() {
   };
   document.addEventListener('keydown', onKey);
   return () => { document.removeEventListener('keydown', onKey); previous?.focus(); };
- }, [modal]);
+ }, [modal, !!state]);
 
  const head = state?.players.find(p => p.id === state.queue[0]?.id);
  const phase = state?.phase || 'lobby';
  const isHost = role === 'host';
+ const multipleChoice = state?.mode === 'multiple-choice';
+ const revealed = phase === 'resolved' || phase === 'final';
+ const selectedChoice = savedAnswer?.code === state?.code && savedAnswer?.questionId === state?.question.id ? savedAnswer?.choiceId : null;
+ const submitted = !!pid && !!state?.submitted?.includes(pid);
  const me = state?.players.find(p => p.id === pid);
  const sorted = [...(state?.players || [])].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, 'tr'));
  const current = state?.question || preview;
@@ -120,9 +135,19 @@ export default function Game() {
  const questionText = current.text || (isHost ? hostQuestion?.text || preview.text : 'Sunucu soruyu açtığında burada göreceksin.');
  const secs = state?.deadline ? Math.min(ANSWER_SECONDS, Math.max(0, Math.ceil((state.deadline - now) / 1000))) : ANSWER_SECONDS;
  const countdown = state?.revealAt ? Math.max(1, Math.ceil((state.revealAt - now) / 1000)) : 3;
- const canBuzz = connected && !!me && ['open', 'answering'].includes(phase) && !state?.locked.includes(pid) && !state?.queue.some(b => b.id === pid) && !state?.pending;
+ const canBuzz = !multipleChoice && connected && !!me && ['open', 'answering'].includes(phase) && !state?.locked.includes(pid) && !state?.queue.some(b => b.id === pid) && !state?.pending;
  const judge = useCallback((correct: boolean) => send('host:judge', { correct, playerId: head?.id, questionId: state?.question.id }), [send, head?.id, state?.question.id]);
- const canPress = connected && (isHost ? me ? canBuzz : ['open', 'answering'].includes(phase) && !state?.pending : me ? canBuzz : !!state);
+ const canPress = !multipleChoice && connected && (isHost ? me ? canBuzz : ['open', 'answering'].includes(phase) && !state?.pending : me ? canBuzz : !!state);
+ const revealAnswers = useCallback(() => send('host:reveal', { questionId: state?.question.id }), [send, state?.question.id]);
+ const chooseAnswer = async (choiceId: string) => {
+  if (isHost || !state || submitting || submitted || phase !== 'open') return;
+  if (!me) { setJoinCode(state.code); setModal('join'); return; }
+  const { code, question: { id: questionId } } = state;
+  setSubmitting(true);
+  const result = await send('answer', { questionId, choiceId });
+  if (result.ok) setSavedAnswer({ code, questionId, choiceId });
+  setSubmitting(false);
+ };
  const pressBuzzer = useCallback(async () => {
   if (!isHost && !me) { if (state?.code) setJoinCode(state.code); setModal('join'); return; }
   if (isHost) {
@@ -139,13 +164,16 @@ export default function Game() {
    if (modal || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes((e.target as HTMLElement).tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
    if (e.code === 'Space' && canPress) { e.preventDefault(); void pressBuzzer(); }
    if (isHost) {
-    if (e.code === 'ArrowRight' && ['lobby', 'resolved'].includes(phase)) void send('host:start');
-    if (phase === 'answering' && e.key.toLowerCase() === 'd') void judge(true);
-    if (phase === 'answering' && e.key.toLowerCase() === 'y') void judge(false);
+    if (e.code === 'ArrowRight' && !e.repeat) {
+     if (multipleChoice && phase === 'open') void revealAnswers();
+     else if (['lobby', 'resolved'].includes(phase)) void send('host:start');
+    }
+    if (!multipleChoice && phase === 'answering' && e.key.toLowerCase() === 'd') void judge(true);
+    if (!multipleChoice && phase === 'answering' && e.key.toLowerCase() === 'y') void judge(false);
    }
   };
   window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
- }, [modal, isHost, canPress, pressBuzzer, send, judge, phase]);
+ }, [modal, isHost, canPress, pressBuzzer, send, judge, phase, multipleChoice, revealAnswers]);
 
  useEffect(() => {
   if (!state?.result || muted) return;
@@ -172,13 +200,20 @@ export default function Game() {
   try { await navigator.clipboard.writeText(`${location.origin}/?room=${state?.code}`); notify('Davet bağlantısı kopyalandı. Ekibinle paylaş!'); }
   catch { setModal('invite'); notify('Bağlantıyı seçip kopyalayabilirsin.'); }
  };
- const update = (key: keyof Question, value: string | number) => setBank(b => b.map((q, i) => i === selected ? { ...q, [key]: value } : q));
+ const update = (key: keyof Question, value: string | number) => setBank(b => b.map((q, i) => i === selected ? { ...q, [key]: value, ...(key === 'answer' ? { choices: q.choices?.map(choice => choice.id === q.choices?.find(option => option.text === q.answer)?.id ? { ...choice, text: String(value) } : choice) } : {}) } : q));
+ const updateChoice = (id: string, changes: Partial<Choice>) => setBank(b => b.map((q, i) => i === selected ? { ...q, ...(changes.text !== undefined && q.choices?.find(choice => choice.id === id)?.text === q.answer ? { answer: changes.text } : {}), choices: q.choices?.map(choice => choice.id === id ? { ...choice, ...changes } : choice) } : q));
+ const setCorrectChoice = (id: string) => setBank(b => b.map((q, i) => {
+  const choice = q.choices?.find(option => option.id === id);
+  return i === selected && choice ? { ...q, answer: choice.text, choices: q.choices?.map(option => option.id === id || option.text === q.answer ? { ...option, weight: undefined } : option) } : q;
+ }));
+ const addChoices = () => setBank(b => b.map((q, i) => i === selected ? { ...q, choices: [q.answer, '', '', ''].map(text => ({ id: crypto.randomUUID(), text })) } : q));
  const storeBank = async () => {
   const r = await send('host:bank', { bank });
   if (r.ok && r.bank) {
    setBank(r.bank);
-   save('vigola-bank', r.bank);
-   save('vigola-use-default-pool', false);
+   const keys = bankStorageKeys(state?.language || 'en');
+   save(keys.bank, r.bank);
+   save(keys.useDefault, false);
    notify('Soru havuzu kaydedildi.');
   }
  };
@@ -188,16 +223,16 @@ export default function Game() {
   setBank(result.bank);
   setSelected(0);
   setSearch('');
-  save('vigola-use-default-pool', true);
+  save(bankStorageKeys(state?.language || 'en').useDefault, true);
   notify('Hazır soru havuzu seçildi.');
  };
  const liveLetters = state?.letters || letters;
 
- return <div className={`app-shell ${isHost ? 'host-view' : 'player-view'}`}>
+ return <div className={`app-shell ${isHost ? 'host-view' : 'player-view'} ${multipleChoice ? 'multiple-choice-mode' : ''}`}>
   <div className="workspace" inert={!!modal}>
    <header className="game-header">
     <div className="wordmark">vigola<span>.</span></div>
-    <div className="header-room"><span className={`connection-dot ${connected ? 'online' : ''}`} /><span>{connected ? 'Oda' : 'Bağlanıyor'}</span><b>{state?.code || '••••••'}</b></div>
+    <div className="header-room"><span className={`connection-dot ${connected ? 'online' : ''}`} /><span>{connected ? 'Oda' : 'Bağlanıyor'}</span><b>{state?.code || '••••••'}</b>{state && <span className="room-language" title="Soru dili">{state.language === 'tr' ? 'TR' : 'EN'}</span>}</div>
     {me && <span className="header-score">{me.name}<b>{me.score} <small>puan</small></b></span>}
     <div className="header-actions">
      <ThemeToggle />
@@ -213,49 +248,68 @@ export default function Game() {
      <div className="question-scroll">
       <article className="current-question">
        <div className="question-kicker"><span className="question-letter">{current.letter}</span><div><b>{current.category}</b><span>{phase === 'lobby' ? 'Soru bekleniyor' : phase === 'countdown' ? 'Soru hazırlanıyor' : 'Şu anki soru'}</span></div><span className="difficulty">{current.difficulty}</span></div>
-       <h2>{phase === 'lobby' ? 'Ekibin hazır mı?' : phase === 'countdown' ? 'Sıradaki soru geliyor…' : questionText}</h2>
-       {phase === 'lobby' && <p className="game-message">{isHost ? 'Oyuncuları davet et, ardından oyunu başlat.' : 'Soruyu gör, ilk sen bas, cevabı sesli söyle.'}</p>}
-       {!['lobby', 'countdown'].includes(phase) && <><div className="question-stakes"><span className="green">+{Math.round(current.points * current.multiplier)} doğru</span><span className="red">−{Math.round(current.penalty * current.multiplier)} yanlış</span></div>{state?.question.code && <pre className="code-sample"><code>{state.question.code}</code></pre>}</>}
-       {isHost && hostQuestion ? <div className="host-solution"><span><ShieldCheck size={14} />YALNIZCA SUNUCU GÖRÜR</span><strong>{hostQuestion.answer}</strong><p>{hostQuestion.explanation}</p></div> : state?.question.answer && <div className="revealed-solution"><span><Check size={16} />Doğru cevap</span><strong>{state.question.answer}</strong><p>{state.question.explanation}</p></div>}
+       <h2 lang={state?.language || 'tr'}>{phase === 'lobby' ? 'Ekibin hazır mı?' : phase === 'countdown' ? 'Sıradaki soru geliyor…' : questionText}</h2>
+       {phase === 'lobby' && <p className="game-message">{isHost ? 'Oyuncuları davet et, ardından oyunu başlat.' : multipleChoice ? 'Soruyu oku, seçeneklerden birini seç. Sonuçlar Next ile açılır.' : 'Soruyu gör, ilk sen bas, cevabı sesli söyle.'}</p>}
+       {!['lobby', 'countdown'].includes(phase) && <><div className="question-stakes">{multipleChoice && <span className="muted">Varsayılan:</span>}<span className="green">+{Math.round(current.points * current.multiplier)} doğru</span><span className="red">−{Math.round(current.penalty * current.multiplier)} yanlış</span></div>{state?.question.code && <pre className="code-sample"><code>{state.question.code}</code></pre>}</>}
+       {multipleChoice && !['lobby', 'countdown'].includes(phase) && <section className="answer-options" aria-label="Cevap seçenekleri">
+        <div className="answer-options-heading"><b>Bir seçenek seç</b><span>{state?.submitted.length || 0} / {state?.players.length || 0} cevapladı</span></div>
+        {state?.question.choices?.map((choice, index) => {
+         const correct = revealed && choice.text === state.question.answer;
+         const picked = selectedChoice === choice.id;
+         return <button key={choice.id} className={`answer-option ${picked ? 'selected' : ''} ${correct ? 'is-correct' : revealed && picked ? 'is-wrong' : ''}`} disabled={!connected || isHost || phase !== 'open' || submitted || !!selectedChoice || submitting} aria-pressed={picked} onClick={() => void chooseAnswer(choice.id)}><span className="option-letter">{String.fromCharCode(65 + index)}</span><span>{choice.text}</span>{revealed && <small className="option-score">{(() => { const weight = choice.weight ?? (correct ? state.question.points : -state.question.penalty); const delta = Math.sign(weight) * Math.round(Math.abs(weight) * state.question.multiplier); return `${delta > 0 ? '+' : ''}${delta}`; })()}</small>}{correct ? <Check size={20} aria-label="Doğru cevap" /> : revealed && picked ? <X size={20} aria-label="Yanlış cevap" /> : picked ? <Check size={18} aria-label="Seçimin" /> : null}</button>;
+        })}
+        <p role="status">{isHost ? revealed ? 'Sonuçlar açık; sonraki soruya geçebilirsin.' : 'Next ile cevapları aç ve puanları hesapla.' : revealed ? 'Cevaplar açıldı. Sonuçları aşağıda görebilirsin.' : submitted || selectedChoice ? 'Cevabın kaydedildi. Sunucunun Next demesini bekle.' : submitting ? 'Cevabın kaydediliyor…' : !me ? 'Bir seçenek seçerek oyuna katıl.' : 'Seçimin kaydedildiğinde değiştirilemez.'}</p>
+       </section>}
+       {multipleChoice && revealed && <section className="choice-results" aria-label="Soru sonuçları"><h3>Bu sorunun sonuçları</h3>{state?.choiceResults.map(result => {
+        const player = state.players.find(p => p.id === result.id);
+        const choice = state.question.choices?.find(option => option.id === result.choiceId);
+        return <div key={result.id} className={result.correct === null ? 'unanswered' : result.correct ? 'is-correct' : 'is-wrong'}><span>{result.correct === null ? '—' : result.correct ? '✓' : '✕'}</span><div><b>{player?.name || 'Oyuncu'}{result.id === pid ? ' (Sen)' : ''}</b><small>{choice?.text || 'Cevap vermedi'}</small></div><strong>{result.delta > 0 ? '+' : ''}{result.delta}</strong></div>;
+       })}{!state?.choiceResults.length && <p className="empty-copy">Bu soruya katılan oyuncu yok.</p>}</section>}
+       {isHost && hostQuestion ? <div className="host-solution"><span><ShieldCheck size={14} />YALNIZCA SUNUCU GÖRÜR</span><strong>{hostQuestion.answer}</strong><p lang={state?.language || 'en'}>{hostQuestion.explanation}</p></div> : state?.question.answer && <div className="revealed-solution"><span><Check size={16} />Doğru cevap</span><strong>{state.question.answer}</strong><p lang={state.language}>{state.question.explanation}</p></div>}
       </article>
       {!!state?.completed?.filter(entry => entry.index !== state.index).length && <h3 className="past-heading">Önceki sorular</h3>}
-      {[...(state?.completed || [])].filter(entry => entry.index !== state?.index).reverse().map(entry => <article className="past-question" key={entry.index}><div><span className="question-letter">{entry.letter}</span><b>{entry.answer}</b><span className={entry.status === 'correct' ? 'green' : 'muted'}>{entry.status === 'correct' ? 'Bilindi' : 'Pas'}</span></div><p>{entry.text}</p></article>)}
+      {[...(state?.completed || [])].filter(entry => entry.index !== state?.index).reverse().map(entry => <article className="past-question" key={entry.index}><div><span className="question-letter">{entry.letter}</span><b>{entry.answer}</b><span className={entry.status === 'correct' ? 'green' : 'muted'}>{entry.status === 'correct' ? 'Bilindi' : multipleChoice ? 'Doğru yok' : 'Pas'}</span></div><p lang={state?.language || 'en'}>{entry.text}</p></article>)}
      </div>
-     {isHost && <div className="host-controls" aria-label="Sunucu oyun kontrolleri">
+     {isHost && multipleChoice && <div className="host-controls" aria-label="Sunucu oyun kontrolleri"><p className="control-hint">{phase === 'open' ? `${state?.submitted.length || 0} oyuncu cevapladı. Next cevapları açar; cevap vermeyenler puan kaybetmez.` : revealed ? 'Sonuçlar açık. Hazır olduğunda devam et.' : 'Herkes aynı soruyu cevaplar.'}</p><button className="button primary" disabled={!connected || busy || phase === 'countdown'} onClick={() => phase === 'final' ? setModal('new') : phase === 'open' ? void revealAnswers() : void send('host:start')}>{phase === 'lobby' ? 'Oyunu başlat' : phase === 'open' ? 'Next · Cevapları göster' : phase === 'countdown' ? 'Soru hazırlanıyor…' : phase === 'final' ? 'Yeni tur' : state?.index === (state?.total || 0) - 1 ? 'Sonuçlar' : 'Sonraki soru'}<ArrowRight size={18} /></button></div>}
+     {isHost && !multipleChoice && <div className="host-controls" aria-label="Sunucu oyun kontrolleri">
       <div className="judge-row"><button className="button correct-button" disabled={!connected || phase !== 'answering'} onClick={() => void judge(true)}><Check size={22} />Doğru<kbd>D</kbd></button><button className="button wrong-button" disabled={!connected || phase !== 'answering'} onClick={() => void judge(false)}><X size={22} />Yanlış<kbd>Y</kbd></button></div>
       <div className="advance-row"><button className="button secondary" disabled={!connected || !['open', 'answering'].includes(phase)} onClick={() => void send('host:pass')}>Pas geç<ChevronRight size={18} /></button><button className="button primary" disabled={!connected || !['lobby', 'resolved', 'final'].includes(phase)} onClick={() => phase === 'final' ? setModal('new') : void send('host:start')}>{phase === 'lobby' ? 'Oyunu başlat' : phase === 'final' ? 'Yeni tur' : state?.index === (state?.total || 0) - 1 ? 'Sonuçlar' : 'Sonraki harf'}<ArrowRight size={18} /></button></div>
      </div>}
     </section>
 
     <section className="wheel-column" aria-label="Oyun alanı">
-     <div className="stage-top"><span>YAZILIM PASSAPAROLASI</span><span className={`round-status ${phase}`}><i />{phase === 'lobby' ? 'Lobi' : phase === 'countdown' ? 'Hazır ol' : phase === 'answering' ? 'Cevap zamanı' : phase === 'resolved' ? 'Tamamlandı' : phase === 'final' ? 'Final' : 'Buzzer açık'}</span></div>
-     {phase === 'final' ? <div className="final-stage"><Trophy className="final-trophy" size={48} /><h2>{sorted.length ? `${sorted[0].name} kazandı!` : 'Oyun tamamlandı'}</h2><p className="game-message">Her harfte biraz daha öğrendik.</p><div className="podium">{sorted.slice(0, 3).map((p, i) => <div className={`podium-place place-${i}`} key={p.id}><Avatar player={p} /><b>{p.name}</b><span>{p.score} puan</span><div>{i + 1}</div></div>)}</div></div> : <GameWheel letters={liveLetters} letter={current.letter} history={state?.history || []} phase={phase} seconds={secs} countdown={countdown} />}
+     <div className="stage-top"><span>{multipleChoice ? 'ÇOKTAN SEÇMELİ' : 'YAZILIM PASSAPAROLASI'}</span><span className={`round-status ${phase}`}><i />{phase === 'lobby' ? 'Lobi' : phase === 'countdown' ? 'Hazır ol' : phase === 'answering' ? 'Cevap zamanı' : phase === 'resolved' ? 'Tamamlandı' : phase === 'final' ? 'Final' : multipleChoice ? 'Cevaplar alınıyor' : 'Buzzer açık'}</span></div>
+     {phase === 'final' ? <div className="final-stage"><Trophy className="final-trophy" size={48} /><h2>{sorted.length ? `${sorted[0].name} kazandı!` : 'Oyun tamamlandı'}</h2><p className="game-message">Her harfte biraz daha öğrendik.</p><div className="podium">{sorted.slice(0, 3).map((p, i) => <div className={`podium-place place-${i}`} key={p.id}><Avatar player={p} /><b>{p.name}</b><span>{p.score} puan</span><div>{i + 1}</div></div>)}</div></div> : <GameWheel letters={liveLetters} letter={current.letter} history={state?.history || []} phase={phase} seconds={secs} countdown={countdown} multipleChoice={multipleChoice} />}
      <div className="turn-status" role="status" aria-live="polite">
-      {phase === 'answering' ? <><AudioLines size={22} /><b>{head?.id === pid ? 'Söz sende!' : `${head?.name || 'Oyuncu'} cevaplıyor`}</b></> : phase === 'countdown' ? 'Parmaklar butonlarda…' : phase === 'lobby' ? 'Herkes hazırsa başlayalım.' : phase === 'resolved' ? state?.result?.correct ? `${state.players.find(p => p.id === state.result?.id)?.name || 'Oyuncu'} doğru bildi!` : 'Bu harfi pas geçtik.' : phase === 'final' ? 'Alkışlar bütün ekibe!' : state?.pending ? 'İlk basan belirleniyor…' : 'Biliyorsan, bas!'}
+      {multipleChoice ? phase === 'lobby' ? 'Herkes hazırsa başlayalım.' : phase === 'countdown' ? 'Soruyu okumaya hazırlan.' : phase === 'final' ? 'Alkışlar bütün ekibe!' : revealed ? 'Cevaplar ve puanlar açık.' : submitted ? 'Cevabın kaydedildi.' : 'Seçimini yap.' : phase === 'answering' ? <><AudioLines size={22} /><b>{head?.id === pid ? 'Söz sende!' : `${head?.name || 'Oyuncu'} cevaplıyor`}</b></> : phase === 'countdown' ? 'Parmaklar butonlarda…' : phase === 'lobby' ? 'Herkes hazırsa başlayalım.' : phase === 'resolved' ? state?.result?.correct ? `${state.players.find(p => p.id === state.result?.id)?.name || 'Oyuncu'} doğru bildi!` : 'Bu harfi pas geçtik.' : phase === 'final' ? 'Alkışlar bütün ekibe!' : state?.pending ? 'İlk basan belirleniyor…' : 'Biliyorsan, bas!'}
      </div>
-     <div className="buzz-queue"><div className="queue-title"><Zap size={16} /><h2>Basış sırası</h2><span>{state?.queue.length || 0}</span></div>{state?.queue.length ? <div className="queue-entries">{state.queue.map((entry, index) => { const p = state.players.find(p => p.id === entry.id); return p && <div className={index === 0 ? 'on-mic' : ''} key={entry.id}><span>{index + 1}</span><Avatar player={p} small /><b>{p.name}</b><small>{index === 0 ? 'Cevaplıyor' : 'Bekliyor'}</small></div>; })}</div> : <p>{state?.pending ? 'Basışlar alınıyor…' : 'Henüz basan yok.'}</p>}</div>
+     {multipleChoice && <div className="buzz-queue submission-summary"><div className="queue-title"><CheckCheck size={16} /><h2>Cevap durumu</h2><span>{state?.submitted.length || 0} / {state?.players.length || 0}</span></div><div className="submission-players">{state?.players.map(player => <span key={player.id} className={state.submitted.includes(player.id) ? 'has-answered' : ''}>{state.submitted.includes(player.id) ? '✓' : '·'} {player.name}</span>)}</div><p>{revealed ? 'Puan tablosu güncellendi.' : 'Seçimler Next ile birlikte görünür.'}</p></div>}
+     {!multipleChoice && <div className="buzz-queue"><div className="queue-title"><Zap size={16} /><h2>Basış sırası</h2><span>{state?.queue.length || 0}</span></div>{state?.queue.length ? <div className="queue-entries">{state.queue.map((entry, index) => { const p = state.players.find(p => p.id === entry.id); return p && <div className={index === 0 ? 'on-mic' : ''} key={entry.id}><span>{index + 1}</span><Avatar player={p} small /><b>{p.name}</b><small>{index === 0 ? 'Cevaplıyor' : 'Bekliyor'}</small></div>; })}</div> : <p>{state?.pending ? 'Basışlar alınıyor…' : 'Henüz basan yok.'}</p>}</div>}
 
     </section>
 
     <aside className="people-column board-panel" aria-label="Puanlar, izleyiciler ve buzzer">
      <section className="leaderboard"><div className="column-heading"><h2><Trophy size={18} />Puan tablosu</h2><span>{sorted.length} oyuncu</span></div><div className="score-list">{sorted.length ? sorted.map((p, index) => <div key={p.id} className={p.id === pid ? 'is-me' : ''}><span className="rank">{index + 1}</span><Avatar player={p} /><b>{p.name}<small><i className={p.connected ? 'online' : ''} />{p.id === pid ? 'Sen' : p.connected ? 'Oyunda' : 'Bağlantısı kesildi'}</small></b><strong>{p.score}</strong></div>) : <p className="empty-copy">İlk oyuncu bekleniyor.</p>}</div></section>
      <section className="viewer-list"><div className="column-heading"><h2><Users size={17} />İzleyiciler</h2><span>{state?.watchers?.length || 0}</span></div><div className="viewer-entries">{state?.watchers?.length ? state.watchers.map(viewer => <span key={viewer.id}><i />{viewer.name}</span>) : <p className="empty-copy">Henüz izleyici yok.</p>}</div></section>
-     <div className="buzzer-area">
+     {!multipleChoice && <div className="buzzer-area">
       <button className={`round-buzzer ${head?.id === pid ? 'has-mic' : ''}`} disabled={!canPress} onClick={() => void pressBuzzer()} aria-label={!isHost && !me ? 'Oyuna katıl ve bas' : 'BAS, söz hakkı al'}><Zap size={28} fill="currentColor" /><strong>BAS</strong><span>{head?.id === pid ? 'Söz sende' : state?.queue.some(entry => entry.id === pid) ? 'Sıradasın' : 'Söz hakkını al'}</span></button>
       <p className="buzzer-caption">{!connected ? 'Bağlantı kuruluyor…' : !isHost && !me ? 'Oynamak için bas ve ismini gir.' : head?.id === pid ? `${secs} saniyede cevabını söyle.` : state?.locked.includes(pid) ? 'Bu sorudaki hakkını kullandın.' : state?.queue.some(entry => entry.id === pid) ? 'Sıran gelince cevaplayacaksın.' : phase === 'lobby' ? 'Oyun başlayınca buton açılır.' : phase === 'countdown' ? 'Soru açılınca basabilirsin.' : ['resolved', 'final'].includes(phase) ? 'Yeni soruyu bekle.' : 'Dokun veya boşluk tuşuna bas.'}</p>
-     </div>
+     </div>}
     </aside>
    </main>
   </div>
 
-  {modal && <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget) setModal(null); }}><div ref={modalElement} className={`modal ${modal === 'questions' ? 'editor-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="modal-title"><button className="modal-close icon-button" onClick={() => setModal(null)} aria-label="Kapat"><X size={21} /></button>{modal !== 'questions' && <span className="modal-symbol">{modal === 'rules' ? <Gamepad2 size={28} /> : modal === 'new' ? <Sparkles size={28} /> : <Users size={28} />}</span>}
+  {modal && <div className="modal-backdrop" onClick={e => { if (e.target === e.currentTarget && (state || modal !== 'new')) setModal(null); }}><div ref={modalElement} className={`modal ${modal === 'questions' ? 'editor-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">{(state || modal !== 'new') && <button className="modal-close icon-button" onClick={() => setModal(null)} aria-label="Kapat"><X size={21} /></button>}{modal !== 'questions' && <span className="modal-symbol">{modal === 'rules' ? <Gamepad2 size={28} /> : modal === 'new' ? <Sparkles size={28} /> : <Users size={28} />}</span>}
    {modal === 'questions' && isHost ? <section className="editor panel">
-     <div className="editor-header"><div><h2 id="modal-title">Soru kütüphanesi <span className="badge">{bank.length} soru</span></h2><p>Oyun başladığında her harf için havuzdan bir soru çekilir. Tamamlanan çarkın soruları tekrar gelmez.</p></div><div className="editor-actions"><button className="button secondary" disabled={phase !== 'lobby'} onClick={() => void restoreDefaultPool()}>Hazır havuzu kullan</button><button className="button primary" disabled={phase !== 'lobby'} onClick={() => void storeBank()}><CheckCheck size={17} /> Seti kaydet</button></div></div>
+     <div className="editor-header"><div><h2 id="modal-title">Soru kütüphanesi <span className="badge">{bank.length} soru</span></h2><p>{state?.language === 'tr' ? 'Türkçe' : 'English'} soru seti. Her harften bir soru seçilir. Tamamlanan sorular dil değiştirince de tekrar gelmez.</p></div><div className="editor-actions"><button className="button secondary" disabled={phase !== 'lobby'} onClick={() => void restoreDefaultPool()}>Hazır havuzu kullan</button><button className="button primary" disabled={phase !== 'lobby'} onClick={() => void storeBank()}><CheckCheck size={17} /> Seti kaydet</button></div></div>
      {phase !== 'lobby' && <div className="notice">Oyun başladı. Değişiklikleri kaydetmek için yeni bir oyun aç.</div>}
-     <div className="editor-body"><div className="question-list"><input aria-label="Soru ara" placeholder="Soru veya harf ara…" value={search} onChange={e => setSearch(e.target.value)} />{bank.map((q, i) => (!search || `${q.letter} ${q.text}`.toLowerCase().includes(search.toLowerCase())) && <button key={q.id} className={selected === i ? 'question-item selected' : 'question-item'} onClick={() => setSelected(i)}><span>{q.letter}</span><div><b>{q.answer}</b><small>{q.category}</small></div><ChevronRight size={15} /></button>)}<button className="button secondary" disabled={phase !== 'lobby' || bank.length >= 300} onClick={() => { const letter = bank[selected]?.letter || 'A'; setBank([...bank, { id: crypto.randomUUID(), letter, text: '', answer: '', explanation: '', category: 'Programlama', difficulty: 'Orta', points: 100, penalty: 25, multiplier: 1 }]); setSelected(bank.length); }}><Plus size={16} /> Soru ekle</button></div>
-      {bank[selected] && <fieldset disabled={phase !== 'lobby'} className="question-form"><div className="form-row"><label>Harf<input maxLength={2} value={bank[selected].letter} onChange={e => update('letter', e.target.value.toUpperCase())} /></label><label>Kategori<input maxLength={60} value={bank[selected].category} onChange={e => update('category', e.target.value)} /></label><label>Zorluk<select value={bank[selected].difficulty} onChange={e => update('difficulty', e.target.value)}><option>Kolay</option><option>Orta</option><option>Zor</option></select></label></div><label>Soru<textarea rows={3} value={bank[selected].text} maxLength={1200} onChange={e => update('text', e.target.value)} /></label><label>Doğru cevap<input value={bank[selected].answer} maxLength={200} onChange={e => update('answer', e.target.value)} /></label><label>Cevap açıklaması<textarea rows={2} maxLength={1500} value={bank[selected].explanation} onChange={e => update('explanation', e.target.value)} /></label><label>Kod örneği <small>(isteğe bağlı)</small><textarea className="code-input" rows={3} maxLength={2000} value={bank[selected].code || ''} onChange={e => update('code', e.target.value)} /></label><div className="form-row">{([['points', 'Doğru puanı', 1, 1000], ['penalty', 'Yanlış cezası', 0, 1000], ['multiplier', 'Katsayı', 0.5, 5]] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} step={key === 'multiplier' ? 0.5 : 1} value={bank[selected][key]} onChange={e => update(key, Number(e.target.value))} /></label>)}</div><div className="editor-footer"><span className="green">+{Math.round(bank[selected].points * bank[selected].multiplier)} doğru</span><span className="red">−{Math.round(bank[selected].penalty * bank[selected].multiplier)} yanlış</span><button className="text-button red" disabled={bank.length === 1} onClick={() => { setBank(bank.filter((_, i) => i !== selected)); setSelected(Math.max(0, selected - 1)); }}>Soruyu sil</button></div></fieldset>}
+     <div className="editor-body"><div className="question-list"><input aria-label="Soru ara" placeholder="Soru veya harf ara…" value={search} onChange={e => setSearch(e.target.value)} />{bank.map((q, i) => (!search || questionMatchesSearch(q, search)) && <button key={q.id} className={selected === i ? 'question-item selected' : 'question-item'} onClick={() => setSelected(i)}><span>{q.letter}</span><div><b>{q.answer}</b><small>{q.category}</small></div><ChevronRight size={15} /></button>)}<button className="button secondary" disabled={phase !== 'lobby' || bank.length >= 300} onClick={() => { const letter = bank[selected]?.letter || 'A'; setBank([...bank, { id: crypto.randomUUID(), letter, text: '', answer: '', explanation: '', category: 'Programlama', difficulty: 'Orta', points: 100, penalty: 25, multiplier: 1 }]); setSelected(bank.length); }}><Plus size={16} /> Soru ekle</button></div>
+      {bank[selected] && <fieldset disabled={phase !== 'lobby'} className="question-form"><div className="form-row"><label>Harf<input maxLength={2} value={bank[selected].letter} onChange={e => update('letter', e.target.value.toUpperCase())} /></label><label>Kategori<input maxLength={60} value={bank[selected].category} onChange={e => update('category', e.target.value)} /></label><label>Zorluk<select value={bank[selected].difficulty} onChange={e => update('difficulty', e.target.value)}><option>Kolay</option><option>Orta</option><option>Zor</option></select></label></div><label>Soru<textarea rows={3} value={bank[selected].text} maxLength={1200} onChange={e => update('text', e.target.value)} /></label><label>Doğru cevap<input value={bank[selected].answer} maxLength={200} onChange={e => update('answer', e.target.value)} /></label><label>Cevap açıklaması<textarea rows={2} maxLength={1500} value={bank[selected].explanation} onChange={e => update('explanation', e.target.value)} /></label>{(multipleChoice || bank[selected].choices) && <section className="choice-editor"><div className="choice-editor-heading"><h3>Seçenekler ve ağırlıklar</h3>{!bank[selected].choices?.length && <button type="button" className="button secondary" onClick={addChoices}>Dört seçenek ekle</button>}</div><p>Doğru seçeneği işaretle. Boş bırakılan ağırlık doğru puanını veya yanlış cezasını kullanır; her ağırlık katsayıyla çarpılır.</p>{bank[selected].choices?.map((choice, index) => {
+       const correct = choice.text === bank[selected].answer;
+       return <div className="choice-editor-row" key={choice.id}><label className="choice-correct"><input type="radio" name={`correct-${bank[selected].id}`} checked={correct} onChange={() => setCorrectChoice(choice.id)} aria-label={`${String.fromCharCode(65 + index)} doğru cevap`} /><span>{String.fromCharCode(65 + index)}</span></label><label>Seçenek<input maxLength={200} value={choice.text} onChange={e => updateChoice(choice.id, { text: e.target.value })} /></label><label>{correct ? 'Doğru ağırlığı' : 'Yanlış ağırlığı'}<input type="number" min={correct ? 0 : -1000} max={correct ? 1000 : 0} placeholder={String(correct ? bank[selected].points : -bank[selected].penalty)} value={choice.weight ?? ''} onChange={e => updateChoice(choice.id, { weight: e.target.value === '' ? undefined : Number(e.target.value) })} /></label></div>;
+      })}</section>}<label>Kod örneği <small>(isteğe bağlı)</small><textarea className="code-input" rows={3} maxLength={2000} value={bank[selected].code || ''} onChange={e => update('code', e.target.value)} /></label><div className="form-row">{([['points', 'Doğru puanı', 1, 1000], ['penalty', 'Yanlış cezası', 0, 1000], ['multiplier', 'Katsayı', 0.5, 5]] as const).map(([key, label, min, max]) => <label key={key}>{label}<input type="number" min={min} max={max} step={key === 'multiplier' ? 0.5 : 1} value={bank[selected][key]} onChange={e => update(key, Number(e.target.value))} /></label>)}</div><div className="editor-footer"><span className="green">+{Math.round(bank[selected].points * bank[selected].multiplier)} doğru</span><span className="red">−{Math.round(bank[selected].penalty * bank[selected].multiplier)} yanlış</span><button className="text-button red" disabled={bank.length === 1} onClick={() => { setBank(bank.filter((_, i) => i !== selected)); setSelected(Math.max(0, selected - 1)); }}>Soruyu sil</button></div></fieldset>}
      </div>
-    </section> : modal === 'invite' ? <><span className="eyebrow">HERKES İÇİN BİR YER VAR</span><h2 id="modal-title">Ekibi bir araya getir.</h2><p>Bağlantıyı paylaş. Telefon veya bilgisayardan katılsınlar; kurulum gerekmiyor.</p><div className="invite-code"><span>ODA KODU</span><strong>{state?.code}</strong></div><label>Davet bağlantısı<input readOnly value={typeof location !== 'undefined' ? `${location.origin}/?room=${state?.code}` : ''} onFocus={e => e.target.select()} /></label><button className="button primary wide" onClick={() => void invite()}><Copy size={17} /> Bağlantıyı kopyala</button><button className="text-button modal-alt" onClick={() => { setJoinCode(''); setModal('join'); }}>Başka bir odaya katıl <ArrowRight size={15} /></button></> : modal === 'join' ? <><span className="eyebrow">SIRA SENDE</span><h2 id="modal-title">Sahneye hoş geldin.</h2><p>Oda kodunu ve adını yaz. İlk harfte görüşürüz.</p><form onSubmit={join}><label>Oda kodu<input autoFocus required minLength={6} maxLength={6} value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} placeholder="ABCDEF" autoComplete="off" /></label><label>Oyundaki adın<input required maxLength={24} value={name} onChange={e => setName(e.target.value)} placeholder="Ekibin seni nasıl tanıyor?" autoComplete="nickname" /></label><button className="button primary wide" disabled={busy || !connected}>{busy ? <LoaderCircle className="spin" size={18} /> : <Zap size={18} />} Oyuna katıl</button></form></> : modal === 'new' ? <><span className="eyebrow">YENİ TUR, YENİ HEYECAN</span><h2 id="modal-title">Yeni bir oyun aç.</h2><p>Yeni oda kodu ve sıfır puanla başlarsınız. Kaydettiğin soru seti kullanılır. Mevcut oda, oyuncular için açık kalır.</p><button className="button primary wide" disabled={busy} onClick={() => void create()}><Plus size={18} /> Yeni oda oluştur</button><button className="button secondary wide" onClick={() => setModal(null)}>Oyuna dön</button></> : <><span className="eyebrow">KÜÇÜK BİR HATIRLATMA</span><h2 id="modal-title">Harf harf, zirveye.</h2><div className="rules"><div><span>1</span><p><b>Soruyu gör.</b> Üç saniyelik hazırlıktan sonra soru herkese açılır. Cevap, ekrandaki harfle başlar.</p></div><div><span>2</span><p><b>İlk sen bas.</b> Buzzer’a dokun veya boşluk tuşuna bas. Sıra, sunucuya ulaşan basışlara göre belirlenir.</p></div><div><span>3</span><p><b>{ANSWER_SECONDS} saniyede cevapla.</b> Cevabını sesli söyle. Sunucu değerlendirir. Doğruysa puan senin; yanlışta veya süre aşımında puan düşer, sıra sonraki oyuncuya geçer.</p></div></div><div className="notice">Her sorunun doğru puanı, yanlış cezası ve katsayısı farklı olabilir. Erken basarsan 1,5 saniye beklersin. Pas geçilen harf o turda tekrar sorulmaz.</div><button className="button primary wide" onClick={() => setModal(null)}>Hazırım, oyuna dön <ArrowRight size={17} /></button></>}
+    </section> : modal === 'invite' ? <><span className="eyebrow">HERKES İÇİN BİR YER VAR</span><h2 id="modal-title">Ekibi bir araya getir.</h2><p>Bağlantıyı paylaş. Telefon veya bilgisayardan katılsınlar; kurulum gerekmiyor.</p><p className="language-note">Soru dili: {state?.language === 'tr' ? 'Türkçe' : 'English'}</p><div className="invite-code"><span>ODA KODU</span><strong>{state?.code}</strong></div><label>Davet bağlantısı<input readOnly value={typeof location !== 'undefined' ? `${location.origin}/?room=${state?.code}` : ''} onFocus={e => e.target.select()} /></label><button className="button primary wide" onClick={() => void invite()}><Copy size={17} /> Bağlantıyı kopyala</button><button className="text-button modal-alt" onClick={() => { setJoinCode(''); setModal('join'); }}>Başka bir odaya katıl <ArrowRight size={15} /></button></> : modal === 'join' ? <><span className="eyebrow">SIRA SENDE</span><h2 id="modal-title">Sahneye hoş geldin.</h2><p>Oda kodunu ve adını yaz. İlk harfte görüşürüz.</p><form onSubmit={join}><label>Oda kodu<input autoFocus required minLength={6} maxLength={6} value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} placeholder="ABCDEF" autoComplete="off" /></label><label>Oyundaki adın<input required maxLength={24} value={name} onChange={e => setName(e.target.value)} placeholder="Ekibin seni nasıl tanıyor?" autoComplete="nickname" /></label><button className="button primary wide" disabled={busy || !connected}>{busy ? <LoaderCircle className="spin" size={18} /> : <Zap size={18} />} Oyuna katıl</button></form></> : modal === 'new' ? <><span className="eyebrow">OYUNU SEN KUR</span><h2 id="modal-title">Nasıl oynayalım?</h2><p>Oyun modunu ve soru dilini seç. O dilde kaydettiğin set, yoksa hazır soru havuzu kullanılır.</p><fieldset className="mode-picker"><legend>Oyun modu</legend>{([{ value: 'buzzer', title: 'Buzzer · Sözlü cevap', description: 'İlk basan cevaplar. Sunucu doğru veya yanlış kararını verir.' }, { value: 'multiple-choice', title: 'Çoktan seçmeli', description: 'Herkes bir seçenek seçer. Next ile cevaplar açılır ve puanlar hesaplanır.' }] as const).map(mode => <label key={mode.value} className={newMode === mode.value ? 'selected' : ''}><input type="radio" name="game-mode" value={mode.value} checked={newMode === mode.value} onChange={() => setNewMode(mode.value)} /><span><b>{mode.title}</b><small>{mode.description}</small></span></label>)}</fieldset><fieldset className="language-picker"><legend>Soru dili</legend>{([{ value: 'tr', title: 'Türkçe', detail: 'Doğal Türkçe, yerleşik teknik terimler korunur.' }, { value: 'en', title: 'English', detail: 'Questions and explanations in English.' }] as const).map(language => <label key={language.value} className={newLanguage === language.value ? 'selected' : ''} lang={language.value}><input type="radio" name="question-language" value={language.value} checked={newLanguage === language.value} onChange={() => setNewLanguage(language.value)} /><span><b>{language.title}</b><small>{language.detail}</small></span></label>)}</fieldset><p className="language-note">Soru dili iki oyun modunda da geçerlidir. Teknik cevaplar ve seçenekler özgün adlarıyla kalır.</p><button className="button primary wide" disabled={busy || !connected} onClick={() => void create(newMode, newLanguage)}>{busy ? <LoaderCircle className="spin" size={18} /> : <Plus size={18} />} Yeni oda oluştur</button>{state && <button className="button secondary wide" onClick={() => setModal(null)}>Oyuna dön</button>}<button className="text-button modal-alt" onClick={() => setModal('join')}>Oda koduyla katıl <ArrowRight size={15} /></button></> : <><span className="eyebrow">KÜÇÜK BİR HATIRLATMA</span><h2 id="modal-title">Harf harf, zirveye.</h2>{multipleChoice ? <div className="rules"><div><span>1</span><p><b>Soruyu oku.</b> Üç saniyelik hazırlıktan sonra soru ve seçenekler açılır.</p></div><div><span>2</span><p><b>Bir seçenek seç.</b> Kaydedilen cevap değiştirilemez. Herkes aynı anda cevaplayabilir.</p></div><div><span>3</span><p><b>Next ile sonucu gör.</b> Sunucu cevapları açar. Seçeneğin ağırlığı ve sorunun katsayısıyla puanın hesaplanır. Cevap vermeyen oyuncu puan kaybetmez.</p></div></div> : <div className="rules"><div><span>1</span><p><b>Soruyu gör.</b> Üç saniyelik hazırlıktan sonra soru herkese açılır. Cevap, ekrandaki harfle başlar.</p></div><div><span>2</span><p><b>İlk sen bas.</b> Buzzer’a dokun veya boşluk tuşuna bas. Sıra, sunucuya ulaşan basışlara göre belirlenir.</p></div><div><span>3</span><p><b>{ANSWER_SECONDS} saniyede cevapla.</b> Cevabını sesli söyle. Sunucu değerlendirir. Doğruysa puan senin; yanlışta veya süre aşımında puan düşer, sıra sonraki oyuncuya geçer.</p></div></div>}<div className="notice">{multipleChoice ? 'Doğru cevap ve kişisel seçimler, sunucu Next diyene kadar gizlidir. Sunucu bu modda yönetici olarak izler.' : 'Her sorunun doğru puanı, yanlış cezası ve katsayısı farklı olabilir. Erken basarsan 1,5 saniye beklersin. Pas geçilen harf o turda tekrar sorulmaz.'}</div><button className="button primary wide" onClick={() => setModal(null)}>Hazırım, oyuna dön <ArrowRight size={17} /></button></>}
   </div></div>}
   {toast && <div className="toast" role="status"><span><Sparkles size={17} /></span>{toast}<button aria-label="Bildirimi kapat" onClick={() => setToast('')}><X size={15} /></button></div>}
  </div>;
