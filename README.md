@@ -4,7 +4,7 @@ Ekibinle canlı yazılım passaparolası. Next.js App Router, React, TypeScript 
 
 ## Yerelde çalıştırma
 
-Node.js 20.9 veya üzeri gerekir.
+Node.js 22.x gerekir (dağıtım ortamıyla aynı ana sürüm).
 
 ```bash
 cd vigola
@@ -80,9 +80,9 @@ Kaynak uygulamanın ayrıntılı incelemesi ve uyarlama kararları: [ANALYSIS.md
 
 ## Bu geliştirme oturumunda doğrulama
 
-- `npm test`: 16/16 test geçti; sunucu buzzer katılımı, tekrar bağlanma, izleyici listesi ve soru geçmişinin cevap gizliliği dahil.
+- `npm test`: 20/20 test geçti; sunucu buzzer katılımı, tekrar bağlanma, izleyici listesi ve soru geçmişinin cevap gizliliği dahil.
 - `npm run typecheck`: geçti; üretim derlemesinin TypeScript kontrolü de geçti.
-- `npm run build`: Next.js 16.1.6 / Webpack ile üretim derlemesi geçti.
+- `npm run build`: Node.js 22.22.2 ve Next.js 16.4.6 / Webpack ile temiz ortamda üretim derlemesi geçti.
 - Kaynak meme-buzzer deposunda değişiklik yok.
-- npm registry DNS erişimi olmadığı için standart `npm install` tamamlanamadı. Doğrulamada bu bilgisayarda mevcut paketlere bağlanan, Git tarafından yok sayılan yerel `node_modules` bağlantıları kullanıldı. Temiz bir ortamda internet erişimiyle `npm install` gerekir; bu oturumda lockfile üretilemedi.
+- `package-lock.json` temiz bir klasörde npm registry paketlerinden yeniden üretildi; başka projelere işaret eden yerel bağlantılar kaldırıldı. Ayrı geçici klasörde `npm ci` ile temiz kurulum doğrulandı; build ve testler bu kurulumda çalıştırıldı.
 - Yerel HTTP sunucusu açma girişimi ortam tarafından `listen EPERM` ile engellendi. Bu yüzden tarayıcıda görsel kontrol ve çoklu cihaz Socket.IO uçtan uca doğrulaması yapılmadı. Başarılı üretim derlemesi, bu kontrollerin yerine geçmez.
