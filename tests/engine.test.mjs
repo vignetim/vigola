@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { loadQuestionHistory } from '../server/question-history.mjs';
 import { Engine, validateBank } from '../server/engine.mjs';
 import { questionPool, questions } from '../lib/questions.mjs';
+import { ANSWER_SECONDS } from '../lib/game-rules.mjs';
 
 function setup(bank = questions) {
  let now = 100000;
@@ -42,14 +43,14 @@ test('first arrival gets mic, duplicate buzz cannot move priority', () => {
  assert.equal(engine.buzz(room, ada), false);
  assert.equal(engine.state(room).pending, true); assert.deepEqual(engine.state(room).queue, []);
  advance(120); assert.equal(room.phase, 'answering'); assert.equal(room.queue[0].id, ada.id);
- assert.equal(room.queue[1].id, ece.id); assert.equal(room.deadline, 108150);
+ assert.equal(room.queue[1].id, ece.id); assert.equal(room.deadline, 103150 + ANSWER_SECONDS * 1000);
 });
-test('wrong answer applies penalty once, locks player and starts next full five seconds', () => {
+test('wrong answer applies penalty once, locks player and starts next full answer time', () => {
  const { engine, room, ada, ece, advance, open } = setup(); open();
  engine.buzz(room, ada); engine.buzz(room, ece); advance(150);
  engine.judge(room, false); assert.equal(ada.score, -25); assert.equal(ada.wrong, 1);
  assert.equal(room.queue[0].id, ece.id); assert.equal(room.phase, 'answering');
- assert.equal(room.deadline, 108150);
+ assert.equal(room.deadline, 103150 + ANSWER_SECONDS * 1000);
  assert.throws(() => engine.buzz(room, ada));
  advance(1000); engine.judge(room, true); assert.equal(ece.score, 100);
  assert.equal(room.phase, 'resolved'); assert.equal(engine.judge(room, true), false);
@@ -57,7 +58,7 @@ test('wrong answer applies penalty once, locks player and starts next full five 
 });
 test('timeout is authoritative, penalizes once and returns to open with no queue', () => {
  const { engine, room, ada, advance, open } = setup(); open(); engine.buzz(room, ada); advance(150);
- advance(4999); assert.equal(ada.score, 0); advance(1);
+ advance(ANSWER_SECONDS * 1000 - 1); assert.equal(ada.score, 0); advance(1);
  assert.equal(ada.score, -25); assert.equal(room.phase, 'open'); assert.equal(room.result.timeout, true);
  advance(20000); assert.equal(ada.score, -25); assert.equal(room.deadline, null);
 });
@@ -100,7 +101,7 @@ test('a late correct decision cannot override the elapsed deadline before a time
  let now = 100000; const engine = new Engine(() => now); const room = engine.create(questions);
  const player = engine.join(room, 'Ada'); player.sockets.add('ada');
  engine.start(room); now += 3000; engine.tick(); engine.buzz(room, player);
- now += 150; engine.tick(); now += 5000;
+ now += 150; engine.tick(); now += ANSWER_SECONDS * 1000;
  engine.judge(room, true);
  assert.equal(player.score, -25); assert.equal(room.result.timeout, true);
  assert.equal(room.phase, 'open'); assert.equal(player.correct, 0);

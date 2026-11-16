@@ -33,7 +33,7 @@ Görsel yön: açık gri çalışma alanı `#f6f7fa`, beyaz paneller `#ffffff`, 
 | Canlı oda / davet / oyuncu / izleyici | Korundu; altı harfli oda kodu ve ayrı katılım bağlantısı |
 | İlk basan ve bekleyenler | Korundu; sıralama sunucuya ulaşma sırasına göre, istemci zamanına güvenilmez |
 | Hazırlık sayımı | Sabit 3 saniye |
-| Cevap süresi | Sabit 5 saniye; süre aşımında sunucu otomatik ceza ve sıra geçişi uygular |
+| Cevap süresi | Sabit 10 saniye; süre aşımında sunucu otomatik ceza ve sıra geçişi uygular |
 | Puan | Soruya ait temel doğru, yanlış cezası ve ayrı katsayı |
 | Soru içerikleri | Meme yerine metin, harf, kategori, zorluk, açıklama ve isteğe bağlı kod |
 | Soru düzenleme | Ayrı kütüphane, ekle/sil/düzenle, arama ve tarayıcıda kayıt |

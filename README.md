@@ -28,8 +28,8 @@ npm start
 1. Sunucu soru kütüphanesinden seti düzenler ve **Seti kaydet** der. Hazır havuzda 24 harf için 264 soru vardır. Kendi havuzuna 300 soru ve 64 farklı harfe kadar ekleyebilirsin.
 2. Oyuncular oda bağlantısından katılır. Sunucu **Oyunu başlat** der.
 3. Üç saniyelik hazırlıktan sonra soru açılır. Buzzer’a ilk basan söz hakkını alır. Basışlar sunucuya ulaşma sırasına göre dizilir; ilk oyuncu için 150 ms toplama aralığı vardır. İstemcinin gönderdiği zaman damgasına güvenilmez.
-4. Her söz hakkında **5 saniye** başlar. Oyuncu cevabı toplantıda veya aynı odada sesli söyler. Uygulama sesli görüşme sağlamaz.
-5. Sunucu doğru/yanlış kararını verir. Süre aşımı sunucu tarafından otomatik yanlış sayılır. Yanlış bilen aynı soruda tekrar basamaz; kuyruktaki sıradaki oyuncu tam 5 saniye alır. Kuyruk boşsa kalan oyuncular basabilir.
+4. Her söz hakkında **10 saniye** başlar. Oyuncu cevabı toplantıda veya aynı odada sesli söyler. Uygulama sesli görüşme sağlamaz.
+5. Sunucu doğru/yanlış kararını verir. Süre aşımı sunucu tarafından otomatik yanlış sayılır. Yanlış bilen aynı soruda tekrar basamaz; kuyruktaki sıradaki oyuncu tam 10 saniye alır. Kuyruk boşsa kalan oyuncular basabilir.
 6. Doğru cevap soruyu kapatır. **Pas geç**, cevabı gösterir ve soruyu puansız kapatır; harf tekrar sorulmaz. Son sorudan sonra sonuçlar gösterilir.
 
 **Puanlama:** `Math.round(doğruPuanı × katsayı)` eklenir. Yanlışta ve süre aşımında `-Math.round(yanlışCezası × katsayı)` uygulanır. Örnek: 100 / 50, katsayı 2 → doğru +200, yanlış −100. Temel değerler 1–1000 / 0–1000, katsayı 0,5–5 aralığındadır. Kesirli puanların büyüklüğü en yakın tam sayıya yuvarlanır; yarımlar yukarı yuvarlanır.
