@@ -14,7 +14,7 @@ type Props = {
 
 export default function GameWheel({ letters, letter, history, phase, seconds, countdown, multipleChoice = false }: Props) {
   const circumference = 2 * Math.PI * 190;
-  const answering = phase === 'answering';
+  const answering = phase === 'answering' || (multipleChoice && phase === 'open');
 
   return (
     <div className={`game-wheel ${answering ? 'is-answering' : ''} ${answering && seconds <= 3 ? 'is-urgent' : ''}`}>

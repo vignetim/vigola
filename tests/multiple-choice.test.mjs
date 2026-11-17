@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Engine, validateBank } from '../server/engine.mjs';
 import { questions } from '../lib/questions.mjs';
+import { ANSWER_SECONDS } from '../lib/game-rules.mjs';
 
 const options = (answer = 'API') => [
  { id: 'option-one', text: answer },
@@ -16,12 +17,13 @@ function setup(bank = [sample(), questions[1]], settings) {
  const room = engine.create(bank, 'multiple-choice');
  const ada = engine.join(room, 'Ada'); ada.sockets.add('ada');
  const ece = engine.join(room, 'Ece'); ece.sockets.add('ece');
- const advance = ms => { now += ms; engine.tick(); };
+ const elapse = ms => { now += ms; };
+ const advance = ms => { elapse(ms); engine.tick(); };
  const open = () => { engine.start(room); advance(3000); };
  const question = () => room.bank[room.index];
  const correct = () => question().choices.find(choice => choice.text === question().answer);
  const wrong = () => question().choices.find(choice => choice.text !== question().answer);
- return { engine, room, ada, ece, advance, open, question, correct, wrong };
+ return { engine, room, ada, ece, advance, elapse, open, question, correct, wrong };
 }
 
 test('room mode defaults to buzzer and invalid modes never create rooms', () => {
@@ -167,9 +169,11 @@ test('per-option weights override defaults and zero-weight answers still count a
  assert.equal(zero.ada.correct, 1); assert.equal(zero.ece.wrong, 1);
 });
 
-test('MC cannot bypass reveal through buzzer controls and stays open without an answer timer', () => {
+test('MC cannot bypass reveal through buzzer controls and automatically resolves after ten seconds', () => {
  const { engine, room, ada, advance, open, question, correct } = setup();
  open();
+ assert.equal(ANSWER_SECONDS, 10);
+ assert.equal(room.deadline, room.revealAt + 10000);
  assert.throws(() => engine.buzz(room, ada), /seçenek seç/);
  const count = room.players.size;
  assert.throws(() => engine.hostBuzz(room, 'host'), /seçenek seç/);
@@ -178,35 +182,111 @@ test('MC cannot bypass reveal through buzzer controls and stays open without an 
  assert.equal(engine.pass(room), false);
  assert.equal(engine.start(room), false);
  engine.submitChoice(room, ada, question().id, correct().id);
+ advance(9999);
+ assert.equal(room.phase, 'open'); assert.equal(ada.score, 0);
+ advance(1);
+ assert.equal(room.phase, 'resolved'); assert.equal(room.deadline, null);
+ assert.equal(ada.score, 100); assert.equal(room.history.length, 1);
  advance(60000);
- assert.equal(room.phase, 'open'); assert.equal(room.deadline, null);
- assert.equal(ada.score, 0); assert.equal(room.history.length, 0);
+ assert.equal(ada.score, 100); assert.equal(room.history.length, 1);
+});
+
+test('earlier correct answers earn more and revealing never changes the recorded answer time', () => {
+ const { engine, room, ada, ece, advance, open, question, correct } = setup([sample()]);
+ open(); advance(2000);
+ engine.submitChoice(room, ada, question().id, correct().id);
+ advance(3000);
+ engine.submitChoice(room, ece, question().id, correct().id);
+ assert.equal(ada.score, 0); assert.equal(ece.score, 0);
+ assert.deepEqual(engine.state(room).choiceResults, []);
+ assert.equal(JSON.stringify(engine.state(room)).includes('elapsedMs'), false);
+ advance(5000);
+ assert.equal(ada.score, 90); assert.equal(ece.score, 75);
+ assert.deepEqual(room.choiceResults.map(({ delta, elapsedMs }) => ({ delta, elapsedMs })), [
+  { delta: 90, elapsedMs: 2000 }, { delta: 75, elapsedMs: 5000 },
+ ]);
+ assert.equal(engine.revealChoices(room, question().id), false);
+ assert.equal(ada.score, 90);
+});
+
+test('simultaneous correct answers share the weighted speed score on early manual reveal', () => {
+ const { engine, room, ada, ece, advance, open, question, correct } = setup([sample({ multiplier: 2.5, choices: [
+  { id: 'a', text: 'API', weight: 155 }, { id: 'b', text: 'Adapter', weight: -17 },
+ ] })]);
+ open(); advance(5000);
+ engine.submitChoice(room, ada, question().id, correct().id);
+ engine.submitChoice(room, ece, question().id, correct().id);
+ advance(1000); engine.revealChoices(room, question().id);
+ assert.equal(ada.score, 291); assert.equal(ece.score, 291);
+ advance(10000);
+ assert.equal(ada.score, 291); assert.equal(ece.score, 291);
+});
+
+test('wrong penalties and zero weights do not change with answer speed', () => {
+ const { engine, room, ada, ece, advance, open, question, wrong } = setup([sample({ multiplier: 2.5, choices: [
+  { id: 'a', text: 'API', weight: 0 }, { id: 'b', text: 'Adapter', weight: -17 },
+ ] })]);
+ open(); engine.submitChoice(room, ada, question().id, wrong().id);
+ advance(9000); engine.submitChoice(room, ece, question().id, wrong().id);
+ advance(1000);
+ assert.equal(ada.score, -43); assert.equal(ece.score, -43);
+ const zero = setup([sample({ choices: [{ id: 'a', text: 'API', weight: 0 }, { id: 'b', text: 'Adapter', weight: 0 }] })]);
+ zero.open(); zero.advance(9000);
+ zero.engine.submitChoice(zero.room, zero.ada, zero.question().id, zero.correct().id);
+ zero.advance(1000);
+ assert.equal(zero.ada.score, 0); assert.equal(zero.ada.correct, 1);
+});
+
+test('deadline rejects late submissions even before the next timer tick', () => {
+ const { engine, room, ada, ece, advance, elapse, open, question, correct } = setup([sample()]);
+ open(); elapse(9999);
+ engine.submitChoice(room, ada, question().id, correct().id);
+ elapse(1);
+ assert.equal(room.phase, 'open');
+ assert.throws(() => engine.submitChoice(room, ece, question().id, correct().id), /süresi doldu/);
+ assert.equal(room.submissions.has(ece.id), false);
+ advance(0);
+ assert.equal(ada.score, 50); assert.equal(ece.score, 0);
+ assert.equal(room.phase, 'resolved');
+});
+
+test('delayed ticks keep the original ten-second deadline and unanswered questions resolve without penalties', () => {
+ const { engine, room, ada, ece, elapse, advance } = setup([sample()]);
+ engine.start(room); elapse(14000); advance(0);
+ assert.equal(room.phase, 'resolved');
+ assert.equal(ada.score, 0); assert.equal(ece.score, 0);
+ assert.equal(room.history[0].status, 'passed');
+ assert.equal(room.choiceResults.every(result => result.correct === null && result.delta === 0), true);
 });
 
 test('reconnection retains the immutable selection and next question resets only current answers', () => {
  const { engine, room, ada, open, advance, question, correct } = setup();
  open();
  const first = question();
+ advance(2000);
  engine.submitChoice(room, ada, first.id, correct().id);
  ada.sockets.clear();
  const resumed = engine.join(room, 'ignored', ada.token); resumed.sockets.add('resumed');
  assert.equal(resumed, ada);
  assert.equal(room.submissions.get(ada.id), correct().id);
+ assert.equal(room.submissionTimes.get(ada.id), room.revealAt + 2000);
  assert.throws(() => engine.submitChoice(room, resumed, first.id, correct().id), /tekrar seçemezsin/);
  engine.revealChoices(room, first.id);
  const oldResults = engine.state(room).choiceResults;
  engine.start(room);
  assert.equal(room.index, 1); assert.equal(room.phase, 'countdown');
  assert.equal(room.submissions.size, 0); assert.deepEqual(engine.state(room).choiceResults, []);
+ assert.equal(room.submissionTimes.size, 0); assert.equal(room.deadline, null);
  const completed = engine.state(room).completed;
  assert.equal(completed.length, 1); assert.equal(completed[0].answer, 'API');
  assert.deepEqual(completed[0].choiceResults, oldResults);
  assert.equal(completed[0].choices.some(choice => choice.text === 'API'), true);
  assert.equal(JSON.stringify(completed).includes('Binary search'), false);
  advance(3000);
+ assert.equal(room.deadline, room.revealAt + ANSWER_SECONDS * 1000);
  assert.throws(() => engine.submitChoice(room, resumed, first.id, first.choices[0].id), /aktif değil/);
  assert.throws(() => engine.revealChoices(room, first.id), /aktif değil/);
- assert.equal(ada.score, 100);
+ assert.equal(ada.score, 90);
 });
 
 test('final reveal persists a completed wheel while incomplete games consume nothing', () => {
@@ -235,4 +315,24 @@ test('a persistence failure on final reveal leaves all scores and answers unreso
  fail = false; engine.revealChoices(room, question().id);
  assert.equal(ada.score, 100); assert.equal(ece.score, -25);
  assert.equal(engine.usedQuestions.size, 1);
+});
+
+test('automatic reveal retries failed persistence without blocking other rooms or allowing late answers', () => {
+ let fail = true;
+ let writes = 0;
+ const { engine, room, ada, ece, open, advance, question, correct } = setup([sample()], { saveUsedQuestions: () => {
+  writes++; if (fail) throw new Error('disk unavailable');
+ } });
+ const other = engine.create([questions[1], questions[2]], 'multiple-choice');
+ engine.start(other); open();
+ engine.submitChoice(room, ada, question().id, correct().id);
+ advance(10000);
+ assert.equal(room.phase, 'open'); assert.equal(ada.score, 0); assert.equal(writes, 1);
+ assert.equal(other.phase, 'resolved'); assert.equal(other.history.length, 1);
+ assert.throws(() => engine.submitChoice(room, ece, question().id, correct().id), /süresi doldu/);
+ advance(999); assert.equal(writes, 1);
+ fail = false; advance(1);
+ assert.equal(writes, 2); assert.equal(room.phase, 'resolved');
+ assert.equal(ada.score, 100); assert.equal(ece.score, 0);
+ advance(10000); assert.equal(ada.score, 100); assert.equal(writes, 2);
 });

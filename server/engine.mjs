@@ -148,7 +148,7 @@ export class Engine {
    if (r.index >= r.bank.length - 1) { r.phase = 'final'; this.event(r, 'Oyun bitti. Alkışlar bütün ekibe!', 'correct'); return true; }
    r.index++;
   }
-  r.phase = 'countdown'; r.revealAt = this.now() + 3000; r.deadline = null; r.settleAt = null; r.queue = []; r.locked = new Set(); r.result = null; r.submissions = new Map(); r.choiceResults = [];
+  r.phase = 'countdown'; r.revealAt = this.now() + 3000; r.deadline = null; r.settleAt = null; r.queue = []; r.locked = new Set(); r.result = null; r.submissions = new Map(); r.submissionTimes = new Map(); r.choiceResults = []; r.choiceRevealRetryAt = null;
   this.event(r, `${r.bank[r.index].letter} harfi geliyor.`, 'info'); return true;
  }
  buzz(r, p) {
@@ -197,12 +197,15 @@ export class Engine {
   if (r.mode !== 'multiple-choice') throw new Error('Bu oda çoktan seçmeli modda değil.');
   if (!p || r.players.get(p.id) !== p) throw new Error('Önce oyuna katıl.');
   if (r.phase !== 'open') throw new Error('Şu anda cevap gönderilemez.');
+  const now = this.now();
+  if (now >= r.deadline) throw new Error('Cevap süresi doldu.');
   const question = r.bank[r.index];
   if (questionId !== question.id) throw new Error('Bu soru artık aktif değil.');
   if (!question.choices.some(choice => choice.id === choiceId)) throw new Error('Geçerli bir seçenek seç.');
   if (r.submissions.has(p.id)) throw new Error('Cevabın kaydedildi; bu soruda tekrar seçemezsin.');
   r.submissions.set(p.id, choiceId);
-  r.updatedAt = this.now();
+  r.submissionTimes.set(p.id, now);
+  r.updatedAt = now;
   return true;
  }
  revealChoices(r, questionId) {
@@ -216,8 +219,12 @@ export class Engine {
    if (!choice) return { id: player.id, choiceId: null, correct: null, delta: 0 };
    const correct = choice.text === question.answer;
    const weight = choice.weight ?? (correct ? question.points : -question.penalty);
-   const delta = Math.sign(weight) * Math.round(Math.abs(weight) * question.multiplier);
-   return { id: player.id, choiceId, correct, delta };
+   const elapsedMs = Math.max(0, Math.min(ANSWER_SECONDS * 1000, r.submissionTimes.get(player.id) - r.revealAt));
+   // Correct answers earn 100% at opening, decreasing linearly to 50% at expiry.
+   // Use server receipt time; revealing early must not change earned points.
+   const speedFactor = correct ? 1 - elapsedMs / (2 * ANSWER_SECONDS * 1000) : 1;
+   const delta = Math.sign(weight) * Math.round(Math.abs(weight) * question.multiplier * speedFactor);
+   return { id: player.id, choiceId, correct, delta, elapsedMs };
   });
   // Persist first: a disk failure must not leave a partially scored final round.
   this.recordCompletedWheel(r);
@@ -238,7 +245,21 @@ export class Engine {
   const changed = [];
   for (const [code, r] of this.rooms) {
    if (this.now() - r.updatedAt > 12 * 3600000) { this.rooms.delete(code); continue; }
-   if (r.phase === 'countdown' && this.now() >= r.revealAt) { r.phase = 'open'; changed.push(r); }
+   if (r.phase === 'countdown' && this.now() >= r.revealAt) {
+    r.phase = 'open';
+    if (r.mode === 'multiple-choice') r.deadline = r.revealAt + ANSWER_SECONDS * 1000;
+    changed.push(r);
+   }
+   if (r.mode === 'multiple-choice' && r.phase === 'open' && this.now() >= r.deadline && (!r.choiceRevealRetryAt || this.now() >= r.choiceRevealRetryAt)) {
+    try { this.revealChoices(r, r.bank[r.index].id); }
+    catch {
+     // A failed history write leaves scoring untouched. Retry without stopping
+     // the timer for every room or accepting answers after the deadline.
+     if (!r.choiceRevealRetryAt) this.event(r, 'Sonuçlar kaydedilemedi; tekrar deneniyor.', 'info');
+     r.choiceRevealRetryAt = this.now() + 1000;
+    }
+    changed.push(r);
+   }
    if (r.phase === 'open' && r.settleAt && this.now() >= r.settleAt) { this.activate(r); changed.push(r); }
    if (r.phase === 'answering' && this.now() >= r.deadline) { this.judge(r, false, true); changed.push(r); }
   }
