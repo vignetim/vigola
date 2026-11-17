@@ -57,22 +57,22 @@ test('joker actions reject invalid, early, stale, late, and foreign-player reque
  assert.equal(ada.availableJokers.size, 5); assert.equal(room.roundJokers.size, 0);
 });
 
-test('one joker per question, only before answering, and spent jokers never return on next question', () => {
+test('different jokers combine before answering and spent jokers never return on the next question', () => {
  const { engine, room, ada, ece, open, use, answer, reveal } = setup();
  open(); use('shield');
- assert.throws(() => use('double-answer'), /yalnızca bir/);
- assert.throws(() => use('shield'), /yalnızca bir/);
- assert.equal(ada.availableJokers.size, 4);
+ assert.equal(use('double-answer'), true);
+ assert.throws(() => use('shield'), /zaten kullandın/);
+ assert.equal(ada.availableJokers.size, 3);
  answer('wrong-one', ece);
  assert.throws(() => use('double-answer', ece), /cevap vermeden önce/);
  assert.equal(ece.availableJokers.size, 5);
  reveal(); open();
  assert.equal(room.roundJokers.size, 0);
- assert.equal(ada.availableJokers.size, 4);
- assert.throws(() => use('shield'), /zaten kullandın/);
- assert.equal(use('double-answer'), true);
  assert.equal(ada.availableJokers.size, 3);
- assert.equal(engine.playerAnswer(room, ece).joker, null);
+ assert.throws(() => use('shield'), /zaten kullandın/);
+ assert.equal(use('bomb'), true);
+ assert.equal(ada.availableJokers.size, 2);
+ assert.deepEqual(engine.playerAnswer(room, ece).jokers, []);
 });
 
 test('fifty-fifty keeps the correct and one wrong option for banks with three to six options', () => {
@@ -99,7 +99,7 @@ test('fifty-fifty affects only its owner, rejects eliminated answers server-side
  assert.equal(room.submissions.size, 0);
  answer(eliminated, ece);
  assert.deepEqual(engine.playerAnswer(room, ece).eliminatedChoiceIds, []);
- assert.equal(engine.playerAnswer(room, ece).joker, null);
+ assert.deepEqual(engine.playerAnswer(room, ece).jokers, []);
  assert.deepEqual(engine.state(room).question.choices, before);
  const publicState = JSON.stringify(engine.state(room));
  for (const field of ['eliminatedChoiceIds', 'availableJokers', 'fifty-fifty', 'choiceIds']) assert.equal(publicState.includes(field), false);
@@ -114,7 +114,7 @@ test('fifty-fifty on two-option questions fails without consuming the joker', ()
  open();
  assert.throws(() => use('fifty-fifty'), /ikiden fazla/);
  assert.equal(ada.availableJokers.has('fifty-fifty'), true);
- assert.equal(engine.playerAnswer(room, ada).joker, null);
+ assert.deepEqual(engine.playerAnswer(room, ada).jokers, []);
 });
 
 test('double-answer supports two different immutable selections and scores a correct second answer at its own time', () => {
@@ -131,9 +131,9 @@ test('double-answer supports two different immutable selections and scores a cor
  assert.equal(ada.score, 0);
  advance(7500);
  const result = room.choiceResults.find(result => result.id === ada.id);
- assert.equal(result.delta, 75); assert.equal(result.elapsedMs, 7500);
+ assert.equal(result.delta, 113); assert.equal(result.elapsedMs, 7500);
  assert.equal(result.choiceId, 'right'); assert.equal(result.correct, true);
- assert.equal(result.joker, 'double-answer'); assert.equal(result.soloBonus, false);
+ assert.deepEqual(result.jokers, ['double-answer']); assert.equal(result.soloBonus, false);
  assert.deepEqual(result.choiceIds, ['wrong-one', 'right']);
  assert.equal(ada.correct, 1); assert.equal(ada.wrong, 0);
 });
@@ -142,7 +142,7 @@ test('double-answer correct-first timing is preserved when the second selection 
  const { room, ada, ece, open, use, answer, advance, reveal } = setup();
  open(); use('double-answer'); advance(3000); answer('right');
  advance(4500); answer('wrong-one'); answer('right', ece); reveal();
- assert.equal(ada.score, 90); assert.equal(ece.score, 75);
+ assert.equal(ada.score, 135); assert.equal(ece.score, 75);
  assert.equal(room.choiceResults.find(result => result.id === ada.id).elapsedMs, 3000);
 });
 
@@ -160,7 +160,7 @@ test('double-answer still allows only a single selection and never accepts its s
  elapse(15000);
  assert.throws(() => answer('wrong-one'), /süresi doldu/);
  advance(0);
- assert.equal(ada.score, 200);
+ assert.equal(ada.score, 300);
  assert.deepEqual(room.choiceResults.find(result => result.id === ada.id).choiceIds, ['right']);
 });
 
@@ -168,34 +168,34 @@ test('shield prevents wrong penalties while correct answers keep speed and solo 
  const { room, ada, open, use, answer, reveal } = setup();
  open(); use('shield'); answer('wrong-one'); reveal();
  assert.equal(ada.score, 0); assert.equal(ada.wrong, 1); assert.equal(ada.correct, 0);
- assert.equal(room.choiceResults.find(result => result.id === ada.id).joker, 'shield');
+ assert.deepEqual(room.choiceResults.find(result => result.id === ada.id).jokers, ['shield']);
  const right = setup(); right.open(); right.use('shield'); right.advance(3000); right.answer('right'); right.reveal();
- assert.equal(right.ada.score, 180); assert.equal(right.ada.correct, 1);
+ assert.equal(right.ada.score, 270); assert.equal(right.ada.correct, 1);
 });
 
-test('a lone correct player gets exactly twice the rounded weighted speed score', () => {
+test('a lone first-correct player receives both solo and first-correct multipliers', () => {
  const { room, ada, open, answer, advance, reveal } = setup([{ ...bank[0], multiplier: 2.5, choices: bank[0].choices.map(choice => choice.id === 'right' ? { ...choice, weight: 155 } : choice) }]);
  open(); advance(7500); answer('right'); reveal();
- assert.equal(ada.score, 582);
+ assert.equal(ada.score, 873);
  const result = room.choiceResults.find(result => result.id === ada.id);
- assert.equal(result.soloBonus, true); assert.equal(result.delta, 582);
- assert.equal(reveal(), false); assert.equal(ada.score, 582);
+ assert.equal(result.soloBonus, true); assert.equal(result.delta, 873);
+ assert.equal(reveal(), false); assert.equal(ada.score, 873);
 });
 
 test('solo bonus depends on responding players, not the number of correct players or chosen options', () => {
  const { room, ada, ece, open, answer, reveal } = setup();
  open(); answer('right'); answer('wrong-one', ece); reveal();
- assert.equal(ada.score, 100);
+ assert.equal(ada.score, 150);
  assert.equal(room.choiceResults.find(result => result.id === ada.id).soloBonus, false);
  const double = setup(); double.open(); double.use('double-answer'); double.answer('wrong-one'); double.answer('right'); double.reveal();
- assert.equal(double.ada.score, 200);
+ assert.equal(double.ada.score, 300);
  assert.equal(double.room.choiceResults.find(result => result.id === double.ada.id).soloBonus, true);
 });
 
 test('using a joker without an answer does not count as responding or change scores', () => {
  const { room, ada, ece, open, use, answer, advance } = setup();
  open(); use('shield', ece); answer('right'); advance(15000);
- assert.equal(ada.score, 200); assert.equal(ece.score, 0); assert.equal(ece.wrong, 0);
+ assert.equal(ada.score, 300); assert.equal(ece.score, 0); assert.equal(ece.wrong, 0);
  assert.deepEqual(room.choiceResults.find(result => result.id === ece.id), { id: ece.id, choiceId: null, correct: null, delta: 0 });
  assert.equal(ece.availableJokers.has('shield'), false);
  const empty = setup(); empty.open(); empty.use('shield'); empty.advance(15000);
@@ -210,7 +210,7 @@ test('reconnection restores inventory, active joker, selections, hints and origi
  const resumed = engine.join(room, 'Ignored', ada.token);
  assert.equal(resumed, ada); assert.deepEqual(engine.playerAnswer(room, resumed), before);
  advance(4500); answer('right', resumed); reveal();
- assert.equal(ada.score, 150);
+ assert.equal(ada.score, 225);
  assert.equal(room.choiceResults.find(result => result.id === ada.id).elapsedMs, 7500);
  const fifty = setup(); fifty.open(); fifty.use('fifty-fifty');
  const hint = fifty.engine.playerAnswer(fifty.room, fifty.ada);
@@ -223,7 +223,7 @@ test('next question clears current joker and choices but preserves spent invento
  const previous = room.choiceResults;
  open();
  const own = engine.playerAnswer(room, ada);
- assert.deepEqual(own.choiceIds, []); assert.equal(own.joker, null);
+ assert.deepEqual(own.choiceIds, []); assert.deepEqual(own.jokers, []);
  assert.deepEqual(own.eliminatedChoiceIds, []);
  assert.deepEqual(own.availableJokers, ['fifty-fifty', 'shield', 'double-points', 'bomb']);
  assert.deepEqual(engine.state(room).completed[0].choiceResults, previous);

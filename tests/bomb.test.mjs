@@ -36,7 +36,7 @@ test('a correct bomb locks all answers and jokers immediately, before the timer 
  assert.equal(JSON.stringify(engine.state(room)).includes('bombOutcome'), false);
  assert.equal(ada.score, 0); assert.equal(ece.score, 0);
  advance(0);
- assert.equal(room.phase, 'resolved'); assert.equal(ada.score, 180);
+ assert.equal(room.phase, 'resolved'); assert.equal(ada.score, 270);
  assert.equal(result(ada).bombOutcome, 'winner');
  assert.equal(ece.score, -25); assert.equal(can.score, -25);
  assert.equal(result(ece).correct, null); assert.equal(result(ece).bombOutcome, 'hit');
@@ -52,7 +52,7 @@ test('bomb activation alone or an incorrect bomb answer never blocks others or a
  answer(ada, 'wrong'); answer(ece, 'right'); advance(0);
  assert.equal(room.phase, 'open'); assert.equal(room.bombWinner, null);
  advance(12000);
- assert.equal(room.phase, 'resolved'); assert.equal(ada.score, -17); assert.equal(ece.score, 90); assert.equal(can.score, 0);
+ assert.equal(room.phase, 'resolved'); assert.equal(ada.score, -17); assert.equal(ece.score, 135); assert.equal(can.score, 0);
  assert.equal(result(ada).bombOutcome, undefined);
  assert.equal(ada.availableJokers.has('bomb'), false);
 });
@@ -66,10 +66,10 @@ test('the first correct bomb arrival wins same-millisecond races regardless of a
  assert.equal(ada.availableJokers.has('bomb'), false); assert.equal(ece.availableJokers.has('bomb'), false);
  advance(0);
  assert.equal(result(ada).bombOutcome, 'winner'); assert.equal(result(ece).bombOutcome, 'hit');
- assert.equal(result(ece).joker, 'bomb'); assert.equal(ece.score, -25);
+ assert.deepEqual(result(ece).jokers, ['bomb']); assert.equal(ece.score, -25);
  open(); assert.equal(room.bombWinner, null); assert.equal(room.bombTargets.size, 0);
  assert.throws(() => use(ece), /zaten kullandın/);
- assert.equal(engine.playerAnswer(room, ece).joker, null);
+ assert.deepEqual(engine.playerAnswer(room, ece).jokers, []);
 });
 
 test('an earlier incorrect bomb does not beat a later correct bomb', () => {
@@ -78,7 +78,7 @@ test('an earlier incorrect bomb does not beat a later correct bomb', () => {
  assert.equal(room.phase, 'open'); answer(ece, 'right'); advance(0);
  assert.equal(room.bombWinner, ece.id); assert.equal(result(ece).bombOutcome, 'winner');
  assert.equal(ada.score, -25); assert.equal(ada.wrong, 1);
- assert.equal(ece.score, 97); assert.equal(ece.correct, 1);
+ assert.equal(ece.score, 146); assert.equal(ece.correct, 1);
 });
 
 test('bomb replaces earlier correct rewards and per-option penalties with the question penalty', () => {
@@ -96,7 +96,7 @@ test('preactivated shields protect unanswered, wrong and correct players from th
  answer(can, 'wrong'); answer(deniz, 'right'); answer(ada, 'right'); advance(0);
  for (const player of [ece, can, deniz]) {
   assert.equal(player.score, 0); assert.equal(result(player).delta, 0);
-  assert.equal(result(player).bombOutcome, 'shielded'); assert.equal(result(player).joker, 'shield');
+  assert.equal(result(player).bombOutcome, 'shielded'); assert.deepEqual(result(player).jokers, ['shield']);
  }
  assert.equal(ece.wrong, 0); assert.equal(can.wrong, 1); assert.equal(deniz.correct, 1);
 });
@@ -113,10 +113,10 @@ test('bomb cuts short a double-answer turn, preventing a second choice after det
 test('bomb preserves the winner speed score and solo bonus and applies no extra multiplier', () => {
  const { players: [ada, ece], open, use, answer, advance, result } = setup();
  open(); use(ada); advance(7500); answer(ada, 'right'); advance(0);
- assert.equal(ada.score, 150); assert.equal(result(ada).elapsedMs, 7500);
+ assert.equal(ada.score, 225); assert.equal(result(ada).elapsedMs, 7500);
  assert.equal(result(ada).soloBonus, true); assert.equal(ece.score, -25);
  const solo = setup({ count: 1 }); solo.open(); solo.use(solo.players[0]); solo.answer(solo.players[0], 'right'); solo.advance(0);
- assert.equal(solo.players[0].score, 200); assert.equal(solo.room.choiceResults.length, 1);
+ assert.equal(solo.players[0].score, 300); assert.equal(solo.room.choiceResults.length, 1);
 });
 
 test('zero-penalty bombs still block the question but leave opponents at zero points', () => {
@@ -129,16 +129,16 @@ test('bomb and shield state survives reconnection without restoring consumed inv
  const { engine, room, players: [ada, ece], open, use, answer, advance, result } = setup();
  open(); use(ada); use(ece, 'shield');
  const resumed = engine.join(room, '', ada.token), shielded = engine.join(room, '', ece.token);
- assert.equal(engine.playerAnswer(room, resumed).joker, 'bomb');
- assert.equal(engine.playerAnswer(room, shielded).joker, 'shield');
+ assert.deepEqual(engine.playerAnswer(room, resumed).jokers, ['bomb']);
+ assert.deepEqual(engine.playerAnswer(room, shielded).jokers, ['shield']);
  answer(resumed, 'right'); assert.equal(engine.join(room, '', ada.token), ada);
  advance(0); assert.equal(result(ece).bombOutcome, 'shielded');
  assert.equal(ada.availableJokers.has('bomb'), false); assert.equal(ece.availableJokers.has('shield'), false);
 });
 
-test('bomb cannot be stacked, activated after answering or submitted after the deadline', () => {
+test('bomb can combine with other jokers but cannot activate after answering or submit after the deadline', () => {
  const { players: [ada, ece], open, use, answer, elapse, room } = setup();
- open(); use(ada); assert.throws(() => use(ada, 'double-points'), /yalnızca bir/);
+ open(); use(ada); assert.equal(use(ada, 'double-points'), true);
  answer(ece, 'right'); assert.throws(() => use(ece), /cevap vermeden önce/);
  elapse(15000); assert.throws(() => answer(ada, 'right'), /süresi doldu/);
  assert.equal(room.bombWinner, null);
@@ -165,7 +165,7 @@ test('bomb scoring retries persistence atomically, retains the winner and ignore
  advance(999); assert.equal(writes, 1);
  fail = false; advance(1);
  assert.equal(room.phase, 'resolved'); assert.equal(writes, 2);
- assert.equal(ada.score, 200); assert.equal(ece.score, -25); assert.equal(can.score, 0); assert.equal(newcomer.score, 0);
+ assert.equal(ada.score, 300); assert.equal(ece.score, -25); assert.equal(can.score, 0); assert.equal(newcomer.score, 0);
  assert.equal(result(ada).bombOutcome, 'winner'); assert.equal(result(ece).bombOutcome, 'hit');
  assert.equal(result(can).bombOutcome, 'shielded'); assert.equal(result(newcomer).bombOutcome, undefined);
  advance(20000); assert.equal(writes, 2); assert.equal(ece.score, -25);

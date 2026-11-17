@@ -6,16 +6,84 @@ import { questionPoolForLanguage } from '../lib/question-locales.mjs';
 import { turkishQuestions } from '../lib/question-locales-tr.mjs';
 import { bankStorageKeys, savedBankForLanguage } from '../lib/room-preferences.mjs';
 import { questionMatchesSearch } from '../lib/question-search.mjs';
-import { Engine, validateBank } from '../server/engine.mjs';
+import { Engine, validateBank, MAX_POOL_QUESTIONS } from '../server/engine.mjs';
 
 const identity = text => createHash('sha256').update(text.normalize('NFC').replace(/\s+/g, ' ').toLocaleLowerCase('tr')).digest('hex');
 
-test('all 264 questions have authored Turkish prompts and explanations with canonical technical answers', () => {
+test('the Turkish catalog adds three times the original count with 44 valid questions per letter', () => {
+ const tr = questionPoolForLanguage('tr');
+ const added = tr.slice(questionPool.length);
+ assert.equal(added.length, questionPool.length * 3);
+ assert.equal(new Set(tr.map(q => q.id)).size, tr.length);
+ assert.equal(new Set(tr.map(q => identity(q.text))).size, tr.length);
+ const letters = [...new Set(questionPool.map(q => q.letter))];
+ assert.equal(new Set(tr.map(q => q.letter)).size, letters.length);
+ for (const letter of letters) {
+  const group = tr.filter(q => q.letter === letter);
+  assert.equal(group.length, 44, letter);
+  assert.ok(new Set(group.map(q => q.answer.toLowerCase())).size === 44, letter);
+  const newGroup = added.filter(q => q.letter === letter);
+  const originalAnswers = new Set(questionPool.filter(q => q.letter === letter).map(q => q.answer.toLowerCase()));
+  assert.ok(new Set(newGroup.map(q => q.answer.toLowerCase()).filter(answer => !originalAnswers.has(answer))).size === 33, letter);
+  assert.ok(newGroup.some(q => q.difficulty === 'Kolay'), letter);
+  assert.ok(newGroup.some(q => q.difficulty === 'Orta'), letter);
+ }
+ for (const q of added) {
+  assert.equal(q.answer[0].toUpperCase(), q.letter, q.id);
+  assert.ok(q.text.endsWith('?'), q.id);
+  assert.ok(q.category.trim() && q.explanation.trim(), q.id);
+  assert.match(q.text + q.explanation, /[çğıöşüÇĞİÖŞÜ]/u, q.id);
+  assert.equal(q.points, 100);
+  assert.equal(q.multiplier, q.difficulty === 'Zor' ? 2 : q.difficulty === 'Orta' ? 1.5 : 1);
+  assert.equal(q.penalty, q.difficulty === 'Zor' ? 50 : q.difficulty === 'Orta' ? 30 : 25);
+ }
+ assert.equal(validateBank(tr).length, 1056);
+});
+
+test('the expanded catalog can be edited and saved at the shared limit while oversized banks are rejected', () => {
+ const pool = questionPoolForLanguage('tr');
+ const engine = new Engine();
+ const room = engine.create(undefined, 'buzzer', 'tr');
+ engine.setPool(room, pool);
+ assert.equal(room.pool.length, 1056);
+ const bank = [...pool];
+ while (bank.length < MAX_POOL_QUESTIONS + 1) {
+  bank.push({ ...pool[0], text: `Özel API sorusu ${bank.length}: arayüzün adı nedir?` });
+ }
+ assert.equal(validateBank(bank.slice(0, MAX_POOL_QUESTIONS)).length, MAX_POOL_QUESTIONS);
+ assert.throws(() => validateBank(bank), /Havuza 1–1200 soru/);
+});
+
+test('Turkish wheels consume all 1056 questions once and remain available after the original bank is exhausted', () => {
+ let now = 100000;
+ const originalIds = validateBank(questionPool).map(q => q.id);
+ let saved = new Set(originalIds);
+ const engine = new Engine(() => now, { usedQuestions: saved, saveUsedQuestions: used => { saved = used; } });
+ const seen = new Set(originalIds);
+ for (let game = 0; game < 33; game++) {
+  const room = engine.create(undefined, 'buzzer', 'tr');
+  for (let turn = 0; turn < 24; turn++) {
+   engine.start(room);
+   const question = room.bank[turn];
+   assert.equal(seen.has(question.id), false, question.text);
+   seen.add(question.id);
+   now += 3000; engine.tick(); engine.pass(room);
+  }
+  assert.equal(saved.size, 264 + (game + 1) * 24);
+ }
+ assert.equal(seen.size, 1056);
+ const room = engine.create(undefined, 'buzzer', 'tr');
+ assert.throws(() => engine.start(room), /kullanılmamış soru kalmadı/);
+ assert.equal(room.phase, 'lobby');
+});
+
+test('the original 264 bilingual questions retain authored translations and canonical technical answers', () => {
  const tr = questionPoolForLanguage('tr');
  const en = questionPoolForLanguage('en');
  assert.deepEqual(Object.keys(turkishQuestions).sort(), questionPool.map(q => q.id).sort());
  assert.deepEqual(en, questionPool);
- assert.equal(tr.length, 264);
+ assert.equal(en.length, 264);
+ assert.equal(tr.length, 1056);
  for (let i = 0; i < en.length; i++) {
   const english = en[i], turkish = tr[i];
   assert.notEqual(turkish.text, english.text, english.id);
@@ -31,7 +99,8 @@ test('all 264 questions have authored Turkish prompts and explanations with cano
 test('localized catalog identities match existing English history while custom edits keep distinct identities', () => {
  const en = validateBank(questionPoolForLanguage('en'));
  const tr = validateBank(questionPoolForLanguage('tr'));
- assert.deepEqual(tr.map(q => q.id), en.map(q => q.id));
+ assert.deepEqual(tr.slice(0, en.length).map(q => q.id), en.map(q => q.id));
+ assert.deepEqual(tr.slice(en.length).map(q => q.id), questionPoolForLanguage('tr').slice(en.length).map(q => identity(q.text)));
  assert.deepEqual(en.map(q => q.id), questionPool.map(q => identity(q.text)));
  const custom = { ...questionPoolForLanguage('tr')[0], text: 'Bu tamamen özel bir API sorusu mu?' };
  assert.equal(validateBank([custom])[0].id, identity(custom.text));
@@ -53,7 +122,7 @@ test('both game modes create rooms in either question language and restore the c
    engine.setPool(room, [{ ...questionPool[0], text: 'A custom question kept exactly as entered?' }]);
    assert.equal(room.pool[0].text, 'A custom question kept exactly as entered?');
    engine.setPool(room);
-   assert.equal(room.pool.length, 264);
+   assert.equal(room.pool.length, language === 'tr' ? 1056 : 264);
    assert.equal(room.pool[0].text, questionPoolForLanguage(language)[0].text);
    if (mode === 'multiple-choice') {
     for (const q of room.pool) {
@@ -99,7 +168,7 @@ test('Turkish MC content stays hidden until open and uses the same canonical ans
  const correct = room.bank[0].choices.find(c => c.text === 'API');
  engine.submitChoice(room, player, room.bank[0].id, correct.id);
  engine.revealChoices(room, room.bank[0].id);
- assert.equal(player.score, 200);
+ assert.equal(player.score, 300);
  assert.equal(engine.state(room).question.explanation, turkishQuestions.a.explanation);
  assert.equal(engine.state(room).completed[0].text, turkishQuestions.a.text);
 });

@@ -31,7 +31,7 @@ test('room mode defaults to buzzer and invalid modes never create rooms', () => 
  assert.equal(engine.create().mode, 'buzzer');
  assert.equal(engine.state(engine.create()).mode, 'buzzer');
  const count = engine.rooms.size;
- for (const mode of [null, '', 'quiz', {}, true]) assert.throws(() => engine.create(undefined, mode), /oyun modu/);
+ for (const mode of [null, '', 'unknown-mode', {}, true]) assert.throws(() => engine.create(undefined, mode), /oyun modu/);
  assert.equal(engine.rooms.size, count);
 });
 
@@ -139,16 +139,16 @@ test('Next reveals and scores all answers once using each question defaults and 
  assert.throws(() => engine.revealChoices(room, 'stale'), /aktif değil/);
  assert.equal(engine.revealChoices(room, question().id), true);
  assert.equal(room.phase, 'resolved'); assert.equal(room.index, 0);
- assert.equal(ada.score, 300); assert.equal(ada.correct, 1);
+ assert.equal(ada.score, 450); assert.equal(ada.correct, 1);
  assert.equal(ece.score, -88); assert.equal(ece.wrong, 1);
  assert.equal(unanswered.score, 0); assert.equal(unanswered.correct, 0); assert.equal(unanswered.wrong, 0);
  const state = engine.state(room);
  assert.equal(state.question.answer, 'API');
  assert.deepEqual(state.choiceResults.find(result => result.id === unanswered.id), { id: unanswered.id, choiceId: null, correct: null, delta: 0 });
- assert.equal(state.choiceResults.find(result => result.id === ada.id).delta, 300);
+ assert.equal(state.choiceResults.find(result => result.id === ada.id).delta, 450);
  assert.equal(state.choiceResults.find(result => result.id === ece.id).delta, -88);
  assert.equal(engine.revealChoices(room, question().id), false);
- assert.equal(ada.score, 300); assert.equal(ece.score, -88);
+ assert.equal(ada.score, 450); assert.equal(ece.score, -88);
  assert.throws(() => engine.submitChoice(room, unanswered, question().id, correct().id), /cevap gönderilemez/);
  engine.start(room); assert.equal(room.phase, 'final');
  assert.equal(engine.state(room).choiceResults.length, 3);
@@ -160,7 +160,7 @@ test('per-option weights override defaults and zero-weight answers still count a
  ] })]);
  open(); engine.submitChoice(room, ada, question().id, correct().id); engine.submitChoice(room, ece, question().id, wrong().id);
  engine.revealChoices(room, question().id);
- assert.equal(ada.score, 388); assert.equal(ece.score, -43);
+ assert.equal(ada.score, 582); assert.equal(ece.score, -43);
  assert.equal(engine.state(room).question.choices.find(choice => choice.text === 'API').weight, 155);
  const zero = setup([sample({ choices: [{ id: 'a', text: 'API', weight: 0 }, { id: 'b', text: 'Adapter', weight: 0 }] })]);
  zero.open(); zero.engine.submitChoice(zero.room, zero.ada, zero.question().id, zero.correct().id); zero.engine.submitChoice(zero.room, zero.ece, zero.question().id, zero.wrong().id);
@@ -186,9 +186,9 @@ test('MC cannot bypass reveal through buzzer controls and automatically resolves
  assert.equal(room.phase, 'open'); assert.equal(ada.score, 0);
  advance(1);
  assert.equal(room.phase, 'resolved'); assert.equal(room.deadline, null);
- assert.equal(ada.score, 200); assert.equal(room.history.length, 1);
+ assert.equal(ada.score, 300); assert.equal(room.history.length, 1);
  advance(60000);
- assert.equal(ada.score, 200); assert.equal(room.history.length, 1);
+ assert.equal(ada.score, 300); assert.equal(room.history.length, 1);
 });
 
 test('earlier correct answers earn more and revealing never changes the recorded answer time', () => {
@@ -201,15 +201,15 @@ test('earlier correct answers earn more and revealing never changes the recorded
  assert.deepEqual(engine.state(room).choiceResults, []);
  assert.equal(JSON.stringify(engine.state(room)).includes('elapsedMs'), false);
  advance(7500);
- assert.equal(ada.score, 90); assert.equal(ece.score, 75);
+ assert.equal(ada.score, 135); assert.equal(ece.score, 75);
  assert.deepEqual(room.choiceResults.map(({ delta, elapsedMs }) => ({ delta, elapsedMs })), [
-  { delta: 90, elapsedMs: 3000 }, { delta: 75, elapsedMs: 7500 },
+  { delta: 135, elapsedMs: 3000 }, { delta: 75, elapsedMs: 7500 },
  ]);
  assert.equal(engine.revealChoices(room, question().id), false);
- assert.equal(ada.score, 90);
+ assert.equal(ada.score, 135);
 });
 
-test('simultaneous correct answers share the weighted speed score on early manual reveal', () => {
+test('same-millisecond correct answers give the first accepted response the weighted first-correct bonus', () => {
  const { engine, room, ada, ece, advance, open, question, correct } = setup([sample({ multiplier: 2.5, choices: [
   { id: 'a', text: 'API', weight: 155 }, { id: 'b', text: 'Adapter', weight: -17 },
  ] })]);
@@ -217,9 +217,9 @@ test('simultaneous correct answers share the weighted speed score on early manua
  engine.submitChoice(room, ada, question().id, correct().id);
  engine.submitChoice(room, ece, question().id, correct().id);
  advance(1000); engine.revealChoices(room, question().id);
- assert.equal(ada.score, 291); assert.equal(ece.score, 291);
+ assert.equal(ada.score, 437); assert.equal(ece.score, 291);
  advance(10000);
- assert.equal(ada.score, 291); assert.equal(ece.score, 291);
+ assert.equal(ada.score, 437); assert.equal(ece.score, 291);
 });
 
 test('wrong penalties and zero weights do not change with answer speed', () => {
@@ -246,7 +246,7 @@ test('deadline rejects late submissions even before the next timer tick', () => 
  assert.throws(() => engine.submitChoice(room, ece, question().id, correct().id), /süresi doldu/);
  assert.equal(room.submissions.has(ece.id), false);
  advance(0);
- assert.equal(ada.score, 100); assert.equal(ece.score, 0);
+ assert.equal(ada.score, 150); assert.equal(ece.score, 0);
  assert.equal(room.phase, 'resolved');
 });
 
@@ -285,7 +285,7 @@ test('reconnection retains the immutable selection and next question resets only
  assert.equal(room.deadline, room.revealAt + MULTIPLE_CHOICE_SECONDS * 1000);
  assert.throws(() => engine.submitChoice(room, resumed, first.id, first.choices[0].id), /aktif değil/);
  assert.throws(() => engine.revealChoices(room, first.id), /aktif değil/);
- assert.equal(ada.score, 180);
+ assert.equal(ada.score, 270);
 });
 
 test('final reveal persists a completed wheel while incomplete games consume nothing', () => {
@@ -298,7 +298,7 @@ test('final reveal persists a completed wheel while incomplete games consume not
  assert.equal(saved.length, 1); assert.equal(saved[0].size, 2); assert.equal(engine.usedQuestions.size, 2);
  assert.equal(engine.state(room).completed.length, 2);
  assert.equal(room.history[1].status, 'passed');
- assert.equal(ada.score, 200);
+ assert.equal(ada.score, 300);
 });
 
 test('a persistence failure on final reveal leaves all scores and answers unresolved for safe retry', () => {
@@ -312,7 +312,7 @@ test('a persistence failure on final reveal leaves all scores and answers unreso
  assert.equal(engine.usedQuestions.size, 0);
  assert.deepEqual(engine.state(room).choiceResults, []);
  fail = false; engine.revealChoices(room, question().id);
- assert.equal(ada.score, 100); assert.equal(ece.score, -25);
+ assert.equal(ada.score, 150); assert.equal(ece.score, -25);
  assert.equal(engine.usedQuestions.size, 1);
 });
 
@@ -332,6 +332,6 @@ test('automatic reveal retries failed persistence without blocking other rooms o
  advance(999); assert.equal(writes, 1);
  fail = false; advance(1);
  assert.equal(writes, 2); assert.equal(room.phase, 'resolved');
- assert.equal(ada.score, 200); assert.equal(ece.score, 0);
- advance(15000); assert.equal(ada.score, 200); assert.equal(writes, 2);
+ assert.equal(ada.score, 300); assert.equal(ece.score, 0);
+ advance(15000); assert.equal(ada.score, 300); assert.equal(writes, 2);
 });
