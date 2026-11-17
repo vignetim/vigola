@@ -3,6 +3,8 @@ import next from 'next';
 import { Server } from 'socket.io';
 import { Engine } from './server/engine.mjs';
 import { loadQuestionHistory } from './server/question-history.mjs';
+import { quizPoolForLanguage } from './lib/quiz-questions.mjs';
+import { quizCategoryCounts } from './lib/quiz-categories.mjs';
 
 const port = Number(process.env.PORT || 3000);
 const dev = process.env.NODE_ENV !== 'production';
@@ -49,19 +51,20 @@ io.on('connection', socket => {
  });
  const hostOnly = fn => data => { if (!host || !room) throw new Error('Bu işlem sunucuya ait.'); return fn(data); };
  on('clock', () => ({ now: Date.now() }));
+ on('quiz:categories', ({ language }) => ({ categoryCounts: quizCategoryCounts(quizPoolForLanguage(language)) }));
  on('host:create', data => {
   const key = socket.handshake.address; const recent = (creationLimits.get(key) || []).filter(t => Date.now() - t < 60000);
   if (recent.length >= 12) throw new Error('Yeni oda açmadan önce bir dakika bekle.');
   recent.push(Date.now()); creationLimits.set(key, recent);
-  const created = engine.create(data.bank, data.mode, data.language); leave(); room = created; host = true; socket.join([room.code, hostChannel(room)]);
-  return { code: room.code, token: room.token, bank: room.pool, mode: room.mode, language: room.language };
+  const created = engine.create(data.bank, data.mode, data.language, data.quizCategory); leave(); room = created; host = true; socket.join([room.code, hostChannel(room)]);
+  return { code: room.code, token: room.token, bank: room.pool, mode: room.mode, language: room.language, quizCategory: room.quizCategory };
  });
  on('host:resume', ({ code, token, playerToken }) => {
   const r = engine.rooms.get(String(code)); if (!r || r.token !== token) throw new Error('Oda oturumu sona ermiş. Yeni oda oluşturabilirsin.');
   leave(); room = r; host = true; socket.join([r.code, hostChannel(r)]);
   player = playerToken && [...r.players.values()].find(p => p.token === playerToken);
   if (player) player.sockets.add(socket.id);
-  return { bank: r.pool, mode: r.mode, language: r.language, ...(player ? { id: player.id, playerToken: player.token, name: player.name } : {}) };
+  return { bank: r.pool, mode: r.mode, language: r.language, quizCategory: r.quizCategory, ...(player ? { id: player.id, playerToken: player.token, name: player.name } : {}) };
  });
  on('host:buzz', hostOnly(({ playerToken }) => {
   const p = engine.hostBuzz(room, socket.id, player?.token || playerToken); player = p;

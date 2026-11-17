@@ -35,9 +35,9 @@ test('quiz is a third mode sharing choice rules while existing modes keep their 
  assert.equal(engine.create(undefined, 'multiple-choice').bank.length, 24);
 });
 
-test('bilingual quiz catalog contains at least sixty unique authored four-option questions with no letter constraint', () => {
+test('quiz catalog contains 660 Turkish and 120 English authored four-option questions with no letter constraint', () => {
  const en = quizPoolForLanguage('en'), tr = quizPoolForLanguage('tr');
- assert.ok(en.length >= 60); assert.equal(en.length, tr.length);
+ assert.equal(en.length, 120); assert.equal(tr.length, 660);
  for (const pool of [en, tr]) {
   const validated = validateBank(pool);
   assert.equal(validated.length, pool.length);
@@ -53,7 +53,7 @@ test('bilingual quiz catalog contains at least sixty unique authored four-option
    assert.equal(question.letter, '?');
   }
  }
- assert.deepEqual(validateBank(en).map(question => question.id), validateBank(tr).map(question => question.id));
+ assert.deepEqual(validateBank(en).map(question => question.id), validateBank(en.map(question => tr.find(candidate => candidate.id === question.id))).map(question => question.id));
  assert.notEqual(en[0].text, tr[0].text);
  assert.equal(canonicalQuizText(tr[0].text, tr[0].answer), en[0].text);
  assert.equal(canonicalQuizText(tr[0].text + ' Özel düzenleme.', tr[0].answer), undefined);

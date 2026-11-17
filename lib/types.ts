@@ -1,4 +1,5 @@
 export type GameMode = 'buzzer' | 'multiple-choice' | 'quiz';
+export type QuizCategory = '' | 'ai' | 'cloud' | 'algorithms' | 'programming' | 'databases' | 'network-security' | 'systems' | 'testing';
 export type QuestionLanguage = 'tr' | 'en';
 export type Choice = { id: string; text: string; weight?: number };
 export type Joker = 'fifty-fifty' | 'double-answer' | 'shield' | 'double-points' | 'bomb';
@@ -7,7 +8,7 @@ export type ChoiceResult = { id: string; choiceId: string | null; correct: boole
 export type Question = { id: string; letter: string; category: string; text: string; answer: string; explanation: string; code?: string; choices?: Choice[]; difficulty: 'Kolay' | 'Orta' | 'Zor'; points: number; penalty: number; multiplier: number };
 export type Player = { id: string; name: string; score: number; connected: boolean; correct: number; wrong: number };
 export type GameState = {
- code: string; mode: GameMode; language: QuestionLanguage; phase: 'lobby' | 'countdown' | 'open' | 'answering' | 'resolved' | 'final'; players: Player[]; index: number; total: number; letters: string[];
+ code: string; mode: GameMode; language: QuestionLanguage; quizCategory: QuizCategory; phase: 'lobby' | 'countdown' | 'open' | 'answering' | 'resolved' | 'final'; players: Player[]; index: number; total: number; letters: string[];
  question: Omit<Question, 'answer' | 'explanation'> & { answer?: string; explanation?: string };
  queue: { id: string; at: number }[]; locked: string[]; revealAt: number | null; deadline: number | null; pending: boolean;
  result: { id: string; correct: boolean; delta: number; timeout?: boolean } | null;

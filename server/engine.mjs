@@ -3,6 +3,7 @@ import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { questionPool } from '../lib/questions.mjs';
 import { quizPoolForLanguage, canonicalQuizText } from '../lib/quiz-questions.mjs';
 import { canonicalQuestionText, questionPoolForLanguage, validateLanguage } from '../lib/question-locales.mjs';
+import { filterQuizCategory, validateQuizCategory } from '../lib/quiz-categories.mjs';
 
 import { MAX_POOL_QUESTIONS } from '../lib/game-rules.mjs';
 export { MAX_POOL_QUESTIONS };
@@ -87,11 +88,12 @@ export class Engine {
  }
  setPool(room, pool) {
   const validated = validateBank(pool ?? (room.mode === 'quiz' ? quizPoolForLanguage(room.language) : questionPoolForLanguage(room.language)));
+  const selected = room.mode === 'quiz' ? filterQuizCategory(validated, room.quizCategory) : validated;
   if (room.mode === 'quiz') {
-   if (validated.length < QUIZ_QUESTION_COUNT) throw new Error(`30 Soru Yarışı için en az ${QUIZ_QUESTION_COUNT} farklı soru ekle.`);
-   if (validated.some(question => question.choices?.length !== 4)) throw new Error('Yarışmadaki her soru için bir doğru ve üç yakın yanlış seçenek tanımla.');
+   if (selected.length < QUIZ_QUESTION_COUNT) throw new Error(room.quizCategory ? `Seçilen kategoride en az ${QUIZ_QUESTION_COUNT} farklı soru olmalı. Başka kategori veya Karışık seç.` : `30 Soru Yarışı için en az ${QUIZ_QUESTION_COUNT} farklı soru ekle.`);
+   if (selected.some(question => question.choices?.length !== 4)) throw new Error('Yarışmadaki her soru için bir doğru ve üç yakın yanlış seçenek tanımla.');
   }
-  room.pool = room.mode === 'multiple-choice' ? validated.map(question => withChoices(question, validated)) : validated;
+  room.pool = room.mode === 'multiple-choice' ? validated.map(question => withChoices(question, validated)) : selected;
   room.bank = room.mode === 'quiz' ? room.pool.slice(0, QUIZ_QUESTION_COUNT) : groupByLetter(room.pool).map(([first]) => first);
  }
  recordCompletedWheel(room) {
@@ -101,13 +103,14 @@ export class Engine {
   this.saveUsedQuestions(used);
   this.usedQuestions = used;
  }
- create(pool, mode = 'buzzer', language = 'en') {
+ create(pool, mode = 'buzzer', language = 'en', quizCategory = '') {
   validateLanguage(language);
   if (!['buzzer', 'multiple-choice', 'quiz'].includes(mode)) throw new Error('Geçerli bir oyun modu seç.');
+  quizCategory = mode === 'quiz' ? validateQuizCategory(quizCategory) : '';
   if (this.rooms.size >= 200) throw new Error('Şu an çok fazla oda var. Biraz sonra tekrar dene.');
   let code; const alphabet = 'ABCDEFGHJKLMNPRSTUVYZ';
   do { code = Array.from({ length: 6 }, () => alphabet[randomInt(alphabet.length)]).join(''); } while (this.rooms.has(code));
-  const room = { code, mode, language, token: randomBytes(24).toString('hex'), players: new Map(), watchers: new Map(), viewerSequence: 0, phase: 'lobby', index: 0, queue: [], locked: new Set(), deadline: null, revealAt: null, settleAt: null, result: null, submissions: new Map(), roundJokers: new Map(), firstCorrectId: null, bombWinner: null, bombTargets: new Set(), choiceResults: [], completedChoices: new Map(), history: [], events: [], updatedAt: this.now() };
+  const room = { code, mode, language, quizCategory, token: randomBytes(24).toString('hex'), players: new Map(), watchers: new Map(), viewerSequence: 0, phase: 'lobby', index: 0, queue: [], locked: new Set(), deadline: null, revealAt: null, settleAt: null, result: null, submissions: new Map(), roundJokers: new Map(), firstCorrectId: null, bombWinner: null, bombTargets: new Set(), choiceResults: [], completedChoices: new Map(), history: [], events: [], updatedAt: this.now() };
   this.setPool(room, pool);
   this.rooms.set(code, room); this.event(room, 'Oda hazır. Ekibini davet et!', 'info'); return room;
  }
@@ -363,7 +366,7 @@ export class Engine {
   const hidden = ['lobby', 'countdown'].includes(r.phase);
   const revealed = ['resolved', 'final'].includes(r.phase);
   const publicChoices = isChoiceMode(r.mode) && !hidden ? { choices: choices.map(choice => revealed ? { ...choice } : { id: choice.id, text: choice.text }) } : {};
-  return { code: r.code, mode: r.mode, language: r.language, phase: r.phase, index: r.index, total: r.bank.length, letters: r.mode === 'quiz' ? [] : r.bank.map(q => q.letter),
+  return { code: r.code, mode: r.mode, language: r.language, quizCategory: r.quizCategory, phase: r.phase, index: r.index, total: r.bank.length, letters: r.mode === 'quiz' ? [] : r.bank.map(q => q.letter),
    watchers: [...r.watchers.values()],
    completed: r.history.map((entry, index) => ({ ...r.bank[index], index, status: entry.status, ...(isChoiceMode(r.mode) ? { choiceResults: r.completedChoices.get(index) || [] } : {}) })),
    question: { ...question, ...publicChoices, ...(hidden ? { text: '', code: '' } : {}), ...(revealed ? { answer, explanation } : {}) },

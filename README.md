@@ -40,7 +40,9 @@ Aşağıdaki söz hakkı akışı **Buzzer · Sözlü cevap** modunda geçerlidi
 
 ## 30 Soru Yarışı
 
-Yeni oda oluştururken **30 Soru Yarışı** seç. Bu mod harf çarkından bağımsızdır: her yarışmada rastgele sırayla **30 farklı soru** ve her soruda konuyla ilişkili **dört yakın seçenek** gelir. Harf veya cevap başlangıcı ipucu verilmez. Hazır soru bankası Türkçe ve İngilizce için ayrı yazılmış senaryo, kod okuma ve mantık soruları içerir.
+Yeni oda oluştururken **30 Soru Yarışı** seç. Bu mod harf çarkından bağımsızdır: her yarışmada rastgele sırayla **30 farklı soru** ve her soruda konuyla ilişkili **dört yakın seçenek** gelir. Harf veya cevap başlangıcı ipucu verilmez. Hazır soru bankası **660 Türkçe**, **120 İngilizce** senaryo, kod okuma ve mantık sorusu içerir. Türkçe bankadaki ilk 60 sorunun İngilizce karşılıkları ve geçmiş kimlikleri korunur; 540 yeni soru yalnız Türkçe havuza eklenir. AI ve Cloud için 30’ar iki dilli soru daha bulunur.
+
+30 Soru Yarışı kurulurken isteğe bağlı sekiz kategori seçilebilir: AI · Yapay zekâ, Cloud, Algoritma ve Mantık, Programlama, Veritabanı, Ağ ve Güvenlik, Sistem Tasarımı, Test ve Kalite. Varsayılan Karışık tüm havuzdan 30 farklı soru seçer. Kategori maçında yalnız ilgili alandan sorular gelir; soru setleri dil ve kategori bazında ayrı saklanır. Türkçe katalog 660, İngilizce katalog 120 sorudur; AI ve Cloud için her iki dilde 30’ar yeni soru eklenmiştir. En az 30 sorusu bulunmayan dil/kategori birleşimleri seçim ekranında pasif gösterilir.
 
 - Her soruda 3 saniye hazırlık, ardından 15 saniye cevap süresi vardır. Herkes tamamlayınca veya Bomba patlayınca soru erken kapanır.
 - Hız puanı, ilk doğru ×1,5, tek cevap ×2 ve beş jokerin birlikte kullanımı harfli çoktan seçmeli modla aynıdır. ×2 ceza etkisi, Bomba yarışı ve Kalkan koruması da geçerlidir.
