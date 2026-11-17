@@ -19,7 +19,7 @@ const hostChannel = room => room.code + ':host';
 const broadcast = room => {
  io.to(hostChannel(room)).emit('host:question', { code: room.code, question: room.bank[room.index] });
  for (const player of room.players.values()) {
-  for (const socketId of player.sockets) io.to(socketId).emit('player:answer', { code: room.code, questionId: room.bank[room.index].id, choiceId: room.submissions?.get(player.id) ?? null });
+  for (const socketId of player.sockets) io.to(socketId).emit('player:answer', engine.playerAnswer(room, player));
  }
  io.to(room.code).emit('state', engine.state(room));
 };
@@ -94,7 +94,12 @@ io.on('connection', socket => {
  on('answer', ({ questionId, choiceId }) => {
   if (!room || !player) throw new Error('Önce oyuna katıl.');
   engine.submitChoice(room, player, questionId, choiceId);
-  return { questionId, choiceId };
+  return { answer: engine.playerAnswer(room, player) };
+ });
+ on('joker', ({ questionId, joker }) => {
+  if (!room || !player) throw new Error('Önce oyuna katıl.');
+  engine.useJoker(room, player, questionId, joker);
+  return { answer: engine.playerAnswer(room, player) };
  });
  socket.on('disconnect', leave);
 });

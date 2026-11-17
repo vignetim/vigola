@@ -1,4 +1,4 @@
-import { ANSWER_SECONDS } from '../lib/game-rules.mjs';
+import { ANSWER_SECONDS, MULTIPLE_CHOICE_SECONDS, JOKERS } from '../lib/game-rules.mjs';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { questionPool } from '../lib/questions.mjs';
 import { canonicalQuestionText, questionPoolForLanguage, validateLanguage } from '../lib/question-locales.mjs';
@@ -101,7 +101,7 @@ export class Engine {
   if (this.rooms.size >= 200) throw new Error('Şu an çok fazla oda var. Biraz sonra tekrar dene.');
   let code; const alphabet = 'ABCDEFGHJKLMNPRSTUVYZ';
   do { code = Array.from({ length: 6 }, () => alphabet[randomInt(alphabet.length)]).join(''); } while (this.rooms.has(code));
-  const room = { code, mode, language, token: randomBytes(24).toString('hex'), players: new Map(), watchers: new Map(), viewerSequence: 0, phase: 'lobby', index: 0, queue: [], locked: new Set(), deadline: null, revealAt: null, settleAt: null, result: null, submissions: new Map(), choiceResults: [], completedChoices: new Map(), history: [], events: [], updatedAt: this.now() };
+  const room = { code, mode, language, token: randomBytes(24).toString('hex'), players: new Map(), watchers: new Map(), viewerSequence: 0, phase: 'lobby', index: 0, queue: [], locked: new Set(), deadline: null, revealAt: null, settleAt: null, result: null, submissions: new Map(), roundJokers: new Map(), choiceResults: [], completedChoices: new Map(), history: [], events: [], updatedAt: this.now() };
   this.setPool(room, pool);
   this.rooms.set(code, room); this.event(room, 'Oda hazır. Ekibini davet et!', 'info'); return room;
  }
@@ -112,7 +112,7 @@ export class Engine {
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 24) throw new Error('1–24 karakter arasında bir isim yaz.');
   name = name.trim();
   if ([...r.players.values()].some(p => p.name.toLocaleLowerCase('tr') === name.toLocaleLowerCase('tr'))) throw new Error('Bu isim kullanılıyor. Başka bir isim seç.');
-  const p = { id: randomBytes(8).toString('hex'), token: randomBytes(24).toString('hex'), name, score: 0, correct: 0, wrong: 0, sockets: new Set(), blockedUntil: 0 };
+  const p = { id: randomBytes(8).toString('hex'), token: randomBytes(24).toString('hex'), name, score: 0, correct: 0, wrong: 0, sockets: new Set(), blockedUntil: 0, availableJokers: new Set(r.mode === 'multiple-choice' ? JOKERS : []) };
   r.players.set(p.id, p); this.event(r, `${name} oyuna katıldı.`, 'join'); return p;
  }
  watch(r, socketId, name) {
@@ -148,7 +148,7 @@ export class Engine {
    if (r.index >= r.bank.length - 1) { r.phase = 'final'; this.event(r, 'Oyun bitti. Alkışlar bütün ekibe!', 'correct'); return true; }
    r.index++;
   }
-  r.phase = 'countdown'; r.revealAt = this.now() + 3000; r.deadline = null; r.settleAt = null; r.queue = []; r.locked = new Set(); r.result = null; r.submissions = new Map(); r.submissionTimes = new Map(); r.choiceResults = []; r.choiceRevealRetryAt = null;
+  r.phase = 'countdown'; r.revealAt = this.now() + 3000; r.deadline = null; r.settleAt = null; r.queue = []; r.locked = new Set(); r.result = null; r.submissions = new Map(); r.roundJokers = new Map(); r.choiceResults = []; r.choiceRevealRetryAt = null;
   this.event(r, `${r.bank[r.index].letter} harfi geliyor.`, 'info'); return true;
  }
  buzz(r, p) {
@@ -193,7 +193,7 @@ export class Engine {
   r.phase = 'resolved'; r.queue = []; r.deadline = null; r.settleAt = null;
   this.event(r, `${r.bank[r.index].letter} harfi pas geçildi.`, 'info'); return true;
  }
- submitChoice(r, p, questionId, choiceId) {
+ choiceContext(r, p, questionId) {
   if (r.mode !== 'multiple-choice') throw new Error('Bu oda çoktan seçmeli modda değil.');
   if (!p || r.players.get(p.id) !== p) throw new Error('Önce oyuna katıl.');
   if (r.phase !== 'open') throw new Error('Şu anda cevap gönderilemez.');
@@ -201,30 +201,79 @@ export class Engine {
   if (now >= r.deadline) throw new Error('Cevap süresi doldu.');
   const question = r.bank[r.index];
   if (questionId !== question.id) throw new Error('Bu soru artık aktif değil.');
-  if (!question.choices.some(choice => choice.id === choiceId)) throw new Error('Geçerli bir seçenek seç.');
-  if (r.submissions.has(p.id)) throw new Error('Cevabın kaydedildi; bu soruda tekrar seçemezsin.');
-  r.submissions.set(p.id, choiceId);
-  r.submissionTimes.set(p.id, now);
+  return { question, now };
+ }
+ playerAnswer(r, p) {
+  if (!p || r.players.get(p.id) !== p) throw new Error('Önce oyuna katıl.');
+  const selections = r.submissions.get(p.id) || [];
+  const active = r.roundJokers.get(p.id);
+  return {
+   code: r.code, questionId: r.bank[r.index].id,
+   choiceId: selections[0]?.choiceId ?? null,
+   choiceIds: selections.map(selection => selection.choiceId),
+   joker: active?.joker ?? null,
+   eliminatedChoiceIds: [...(active?.eliminatedChoiceIds || [])],
+   availableJokers: [...p.availableJokers],
+  };
+ }
+ useJoker(r, p, questionId, joker) {
+  const { question, now } = this.choiceContext(r, p, questionId);
+  if (!JOKERS.includes(joker)) throw new Error('Geçerli bir joker seç.');
+  if (r.submissions.has(p.id)) throw new Error('Jokeri cevap vermeden önce kullanmalısın.');
+  if (r.roundJokers.has(p.id)) throw new Error('Bir soruda yalnızca bir joker kullanabilirsin.');
+  if (!p.availableJokers.has(joker)) throw new Error('Bu jokeri zaten kullandın.');
+  if (joker === 'fifty-fifty' && question.choices.length <= 2) throw new Error('Yarı yarıya için ikiden fazla seçenek olmalı.');
+  const eliminatedChoiceIds = joker === 'fifty-fifty'
+   ? shuffled(question.choices.filter(choice => choice.text !== question.answer)).slice(0, question.choices.length - 2).map(choice => choice.id)
+   : [];
+  r.roundJokers.set(p.id, { joker, eliminatedChoiceIds });
+  p.availableJokers.delete(joker);
   r.updatedAt = now;
   return true;
+ }
+ submitChoice(r, p, questionId, choiceId) {
+  const { question, now } = this.choiceContext(r, p, questionId);
+  if (!question.choices.some(choice => choice.id === choiceId)) throw new Error('Geçerli bir seçenek seç.');
+  const active = r.roundJokers.get(p.id);
+  if (active?.eliminatedChoiceIds.includes(choiceId)) throw new Error('Elenen bir seçeneği seçemezsin.');
+  const selections = r.submissions.get(p.id) || [];
+  const limit = active?.joker === 'double-answer' ? 2 : 1;
+  if (selections.length >= limit || selections.some(selection => selection.choiceId === choiceId)) throw new Error('Cevabın kaydedildi; bu soruda tekrar seçemezsin.');
+  selections.push({ choiceId, at: now });
+  r.submissions.set(p.id, selections);
+  r.updatedAt = now;
+  return true;
+ }
+ allChoicesComplete(r) {
+  return r.players.size > 0 && [...r.players.keys()].every(id => {
+   const limit = r.roundJokers.get(id)?.joker === 'double-answer' ? 2 : 1;
+   return (r.submissions.get(id)?.length || 0) >= limit;
+  });
  }
  revealChoices(r, questionId) {
   if (r.mode !== 'multiple-choice') throw new Error('Bu oda çoktan seçmeli modda değil.');
   if (questionId !== r.bank[r.index].id) throw new Error('Bu soru artık aktif değil.');
   if (r.phase !== 'open') return false;
   const question = r.bank[r.index];
+  const solo = r.submissions.size === 1;
   const results = [...r.players.values()].map(player => {
-   const choiceId = r.submissions.get(player.id);
-   const choice = question.choices.find(option => option.id === choiceId);
-   if (!choice) return { id: player.id, choiceId: null, correct: null, delta: 0 };
+   const selections = r.submissions.get(player.id);
+   if (!selections?.length) return { id: player.id, choiceId: null, correct: null, delta: 0 };
+   const selected = selections.map(selection => ({ ...selection, choice: question.choices.find(option => option.id === selection.choiceId) }));
+   const scoring = selected.find(selection => selection.choice.text === question.answer) || selected[0];
+   const { choiceId, choice, at } = scoring;
    const correct = choice.text === question.answer;
+   const joker = r.roundJokers.get(player.id)?.joker ?? null;
    const weight = choice.weight ?? (correct ? question.points : -question.penalty);
-   const elapsedMs = Math.max(0, Math.min(ANSWER_SECONDS * 1000, r.submissionTimes.get(player.id) - r.revealAt));
+   const elapsedMs = Math.max(0, Math.min(MULTIPLE_CHOICE_SECONDS * 1000, at - r.revealAt));
    // Correct answers earn 100% at opening, decreasing linearly to 50% at expiry.
    // Use server receipt time; revealing early must not change earned points.
-   const speedFactor = correct ? 1 - elapsedMs / (2 * ANSWER_SECONDS * 1000) : 1;
-   const delta = Math.sign(weight) * Math.round(Math.abs(weight) * question.multiplier * speedFactor);
-   return { id: player.id, choiceId, correct, delta, elapsedMs };
+   const speedFactor = correct ? 1 - elapsedMs / (2 * MULTIPLE_CHOICE_SECONDS * 1000) : 1;
+   let delta = Math.sign(weight) * Math.round(Math.abs(weight) * question.multiplier * speedFactor);
+   if (correct && solo) delta *= 2;
+   if (correct && joker === 'double-points') delta *= 2;
+   if (!correct && joker === 'shield') delta = 0;
+   return { id: player.id, choiceId, choiceIds: selections.map(selection => selection.choiceId), correct, delta, elapsedMs, joker, soloBonus: correct && solo };
   });
   // Persist first: a disk failure must not leave a partially scored final round.
   this.recordCompletedWheel(r);
@@ -247,10 +296,12 @@ export class Engine {
    if (this.now() - r.updatedAt > 12 * 3600000) { this.rooms.delete(code); continue; }
    if (r.phase === 'countdown' && this.now() >= r.revealAt) {
     r.phase = 'open';
-    if (r.mode === 'multiple-choice') r.deadline = r.revealAt + ANSWER_SECONDS * 1000;
+    if (r.mode === 'multiple-choice') r.deadline = r.revealAt + MULTIPLE_CHOICE_SECONDS * 1000;
     changed.push(r);
    }
-   if (r.mode === 'multiple-choice' && r.phase === 'open' && this.now() >= r.deadline && (!r.choiceRevealRetryAt || this.now() >= r.choiceRevealRetryAt)) {
+   if (r.mode === 'multiple-choice' && r.phase === 'open' && (this.now() >= r.deadline || this.allChoicesComplete(r)) && (!r.choiceRevealRetryAt || this.now() >= r.choiceRevealRetryAt)) {
+    // End the answering window even if persisting the results needs a retry.
+    r.deadline = Math.min(r.deadline, this.now());
     try { this.revealChoices(r, r.bank[r.index].id); }
     catch {
      // A failed history write leaves scoring untouched. Retry without stopping

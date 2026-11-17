@@ -1,4 +1,4 @@
-import { ANSWER_SECONDS } from '@/lib/game-rules.mjs';
+import { ANSWER_SECONDS, MULTIPLE_CHOICE_SECONDS } from '@/lib/game-rules.mjs';
 import { Timer } from 'lucide-react';
 import type { GameState } from '@/lib/types';
 
@@ -14,13 +14,14 @@ type Props = {
 
 export default function GameWheel({ letters, letter, history, phase, seconds, countdown, multipleChoice = false }: Props) {
   const circumference = 2 * Math.PI * 190;
+  const answerSeconds = multipleChoice ? MULTIPLE_CHOICE_SECONDS : ANSWER_SECONDS;
   const answering = phase === 'answering' || (multipleChoice && phase === 'open');
 
   return (
     <div className={`game-wheel ${answering ? 'is-answering' : ''} ${answering && seconds <= 3 ? 'is-urgent' : ''}`}>
       <svg viewBox="0 0 400 400" role="img" aria-label={`Harf çarkı. Aktif harf: ${letter}`}>
         <circle className="wheel-timer-track" cx="200" cy="200" r="190" />
-        {answering && <circle className="wheel-timer-progress" cx="200" cy="200" r="190" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - seconds / ANSWER_SECONDS)} transform="rotate(-90 200 200)" />}
+        {answering && <circle className="wheel-timer-progress" cx="200" cy="200" r="190" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - seconds / answerSeconds)} transform="rotate(-90 200 200)" />}
         {letters.map((item, index) => {
           const multipleRings = letters.length > 32;
           const count = multipleRings ? Math.ceil(letters.length / 2) : letters.length;

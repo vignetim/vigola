@@ -99,7 +99,7 @@ test('Turkish MC content stays hidden until open and uses the same canonical ans
  const correct = room.bank[0].choices.find(c => c.text === 'API');
  engine.submitChoice(room, player, room.bank[0].id, correct.id);
  engine.revealChoices(room, room.bank[0].id);
- assert.equal(player.score, 100);
+ assert.equal(player.score, 200);
  assert.equal(engine.state(room).question.explanation, turkishQuestions.a.explanation);
  assert.equal(engine.state(room).completed[0].text, turkishQuestions.a.text);
 });

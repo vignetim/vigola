@@ -1,7 +1,9 @@
 export type GameMode = 'buzzer' | 'multiple-choice';
 export type QuestionLanguage = 'tr' | 'en';
 export type Choice = { id: string; text: string; weight?: number };
-export type ChoiceResult = { id: string; choiceId: string | null; correct: boolean | null; delta: number; elapsedMs?: number };
+export type Joker = 'fifty-fifty' | 'double-answer' | 'shield' | 'double-points';
+export type PrivateAnswer = { code: string; questionId: string; choiceId: string | null; choiceIds: string[]; joker: Joker | null; eliminatedChoiceIds: string[]; availableJokers: Joker[] };
+export type ChoiceResult = { id: string; choiceId: string | null; correct: boolean | null; delta: number; elapsedMs?: number; choiceIds?: string[]; joker?: Joker | null; soloBonus?: boolean };
 export type Question = { id: string; letter: string; category: string; text: string; answer: string; explanation: string; code?: string; choices?: Choice[]; difficulty: 'Kolay' | 'Orta' | 'Zor'; points: number; penalty: number; multiplier: number };
 export type Player = { id: string; name: string; score: number; connected: boolean; correct: number; wrong: number };
 export type GameState = {
