@@ -27,8 +27,9 @@ export default function GameWheel({ letters, letter, history, phase, seconds, co
           const count = multipleRings ? Math.ceil(letters.length / 2) : letters.length;
           const angle = (index % count) / count * Math.PI * 2 - Math.PI / 2;
           const radius = multipleRings && index >= count ? 128 : 165;
-          const x = 200 + radius * Math.cos(angle);
-          const y = 200 + radius * Math.sin(angle);
+          // Keep SVG attributes identical across server and browser math engines.
+          const x = Number((200 + radius * Math.cos(angle)).toFixed(4));
+          const y = Number((200 + radius * Math.sin(angle)).toFixed(4));
           const status = history.find(entry => entry.letter === item)?.status;
           const active = item === letter;
           return <g key={item} className={`wheel-letter ${active ? 'active' : ''} ${status || ''}`} transform={`translate(${x}, ${y})`} aria-hidden="true">

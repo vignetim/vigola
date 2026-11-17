@@ -10,6 +10,7 @@ import { QUIZ_CATEGORIES } from '@/lib/quiz-categories.mjs';
 import { questionMatchesSearch } from '@/lib/question-search.mjs';
 import GameWheel from './game-wheel';
 import QuizStage from './quiz-stage';
+import JokerCard from './joker-card';
 import ThemeToggle from './theme-toggle';
 
 type Reply = { ok: boolean; error?: string; code?: string; token?: string; id?: string; name?: string; bank?: Question[]; mode?: GameMode; language?: QuestionLanguage; quizCategory?: QuizCategory; categoryCounts?: Record<string, number>; playerToken?: string; now?: number; questionId?: string; choiceId?: string; answer?: PrivateAnswer };
@@ -268,43 +269,18 @@ export default function Game() {
   notify('Hazır soru havuzu seçildi.');
  };
  const liveLetters = state?.letters || letters;
+ const progressPanel = (<section className={`wheel-column ${multipleChoice ? 'compact-stage board-panel' : ''}`} aria-label="Oyun ilerlemesi">
+     <div className="stage-top"><span>{quiz ? '30 SORU YARIŞI' : multipleChoice ? 'ÇOKTAN SEÇMELİ' : 'YAZILIM PASSAPAROLASI'}</span><span className={`round-status ${phase}`}><i />{phase === 'lobby' ? 'Lobi' : phase === 'countdown' ? 'Hazır ol' : phase === 'answering' ? 'Cevap zamanı' : phase === 'resolved' ? 'Tamamlandı' : phase === 'final' ? 'Final' : multipleChoice ? 'Cevaplar alınıyor' : 'Buzzer açık'}</span></div>
+     {phase === 'final' ? <div className="final-stage"><Trophy className="final-trophy" size={48} /><h2>{sorted.length ? `${sorted[0].name} kazandı!` : 'Oyun tamamlandı'}</h2><p className="game-message">Her harfte biraz daha öğrendik.</p><div className="podium">{sorted.slice(0, 3).map((p, i) => <div className={`podium-place place-${i}`} key={p.id}><Avatar player={p} /><b>{p.name}</b><span>{p.score} puan</span><div>{i + 1}</div></div>)}</div></div> : quiz ? <QuizStage index={state?.index || 0} total={state?.total || QUIZ_QUESTION_COUNT} history={state?.history || []} phase={phase} seconds={secs} countdown={countdown} /> : <GameWheel letters={liveLetters} letter={current.letter} history={state?.history || []} phase={phase} seconds={secs} countdown={countdown} multipleChoice={multipleChoice} />}
+     <div className="turn-status" role="status" aria-live="polite">
+      {multipleChoice ? phase === 'lobby' ? 'Herkes hazırsa başlayalım.' : phase === 'countdown' ? 'Soruyu okumaya hazırlan.' : phase === 'final' ? 'Alkışlar bütün ekibe!' : revealed ? 'Cevaplar ve puanlar açık.' : activeJokers.includes('double-answer') && selectedChoices.length === 1 && !choiceExpired ? 'İkinci seçimini yapabilirsin.' : submitted ? 'Cevabın kaydedildi.' : 'Seçimini yap.' : phase === 'answering' ? <><AudioLines size={22} /><b>{head?.id === pid ? 'Söz sende!' : `${head?.name || 'Oyuncu'} cevaplıyor`}</b></> : phase === 'countdown' ? 'Parmaklar butonlarda…' : phase === 'lobby' ? 'Herkes hazırsa başlayalım.' : phase === 'resolved' ? state?.result?.correct ? `${state.players.find(p => p.id === state.result?.id)?.name || 'Oyuncu'} doğru bildi!` : 'Bu harfi pas geçtik.' : phase === 'final' ? 'Alkışlar bütün ekibe!' : state?.pending ? 'İlk basan belirleniyor…' : 'Biliyorsan, bas!'}
+     </div>
+     {!multipleChoice && <div className="buzz-queue"><div className="queue-title"><Zap size={16} /><h2>Basış sırası</h2><span>{state?.queue.length || 0}</span></div>{state?.queue.length ? <div className="queue-entries">{state.queue.map((entry, index) => { const p = state.players.find(p => p.id === entry.id); return p && <div className={index === 0 ? 'on-mic' : ''} key={entry.id}><span>{index + 1}</span><Avatar player={p} small /><b>{p.name}</b><small>{index === 0 ? 'Cevaplıyor' : 'Bekliyor'}</small></div>; })}</div> : <p>{state?.pending ? 'Basışlar alınıyor…' : 'Henüz basan yok.'}</p>}</div>}
 
- return <div className={`app-shell ${isHost ? 'host-view' : 'player-view'} ${multipleChoice ? 'multiple-choice-mode' : ''} ${quiz ? 'quiz-mode' : ''}`}>
-  <div className="workspace" inert={!!modal}>
-   <header className="game-header">
-    <div className="wordmark">vigola<span>.</span></div>
-    <div className="header-room"><span className={`connection-dot ${connected ? 'online' : ''}`} /><span>{connected ? 'Oda' : 'Bağlanıyor'}</span><b>{state?.code || '••••••'}</b>{state && <span className="room-language" title="Soru dili">{state.language === 'tr' ? 'TR' : 'EN'}</span>}</div>
-    {me && <span className="header-score">{me.name}<b>{me.score} <small>puan</small></b></span>}
-    <div className="header-actions">
-     <ThemeToggle />
-     {isHost && <button className="icon-button" aria-label="İzleyici ekranını aç" title="İzleyici ekranı" onClick={() => { if (state) window.open(`/?room=${state.code}&watch=1`, '_blank', 'noopener,noreferrer'); }}><ExternalLink size={20} /></button>}
-     <button className="icon-button" aria-label={muted ? 'Sesi aç' : 'Sesi kapat'} onClick={() => setMuted(!muted)}>{muted ? <VolumeX size={21} /> : <Volume2 size={21} />}</button>
-     {isHost && <><button className="button secondary header-edit" onClick={() => setModal('questions')}>Soruları düzenle</button><button className="button secondary" onClick={() => setModal('new')} aria-label="Yeni oyun"><Plus size={18} /><span>Yeni oyun</span></button><button className="button primary invite-button" disabled={!state} onClick={() => setModal('invite')}><Users size={18} /><span>Davet et</span></button></>}
-     {!isHost && <button className="icon-button" onClick={() => setModal('rules')} aria-label="Oyun kuralları"><CircleHelp size={21} /></button>}
-    </div>
-   </header>
-   <main className="live-board">
-    <section className="question-column board-panel" aria-label="Soru ve cevap akışı">
-     <div className="column-heading"><h1>{quiz ? QUIZ_CATEGORIES.find(category => category.id === state?.quizCategory)?.label || '30 Soru Yarışı' : 'Soru akışı'}</h1><span>{(state?.index || 0) + 1} / {state?.total || 24}</span></div>
-     <div className="question-scroll">
-      <article className="current-question">
-       <div className="question-kicker"><span className="question-letter">{quiz ? String((state?.index || 0) + 1).padStart(2, '0') : current.letter}</span><div><b>{current.category}</b><span>{phase === 'lobby' ? 'Soru bekleniyor' : phase === 'countdown' ? 'Soru hazırlanıyor' : 'Şu anki soru'}</span></div><span className="difficulty">{current.difficulty}</span></div>
-       <h2 lang={state?.language || 'tr'}>{phase === 'lobby' ? 'Ekibin hazır mı?' : phase === 'countdown' ? 'Sıradaki soru geliyor…' : questionText}</h2>
-       {phase === 'lobby' && <p className="game-message">{isHost ? 'Oyuncuları davet et, ardından oyunu başlat.' : multipleChoice ? `${MULTIPLE_CHOICE_SECONDS} saniyede seçimini yap. İlk doğru cevap ×1,5; beş jokerini birlikte kullanabilirsin.` : 'Soruyu gör, ilk sen bas, cevabı sesli söyle.'}</p>}
-       {!['lobby', 'countdown'].includes(phase) && <><div className="question-stakes">{multipleChoice && <span className="muted">Temel:</span>}<span className="green">+{Math.round(current.points * current.multiplier)} doğru{multipleChoice ? ' · hızına göre' : ''}</span><span className="red">−{Math.round(current.penalty * current.multiplier)} yanlış</span>{multipleChoice && <span className="question-bonuses">İlk doğru ×1,5 · Tek cevap ×2 · ×2 puan jokeriyle birleşir</span>}</div>{state?.question.code && <pre className="code-sample"><code>{state.question.code}</code></pre>}</>}
-       {multipleChoice && !isHost && me && <section className="joker-tray" aria-label="Kişisel jokerlerin">
-        <div className="joker-heading"><h3><Sparkles size={16} />Jokerlerin</h3><span>{privateAnswer ? `${privateAnswer.availableJokers.length} / ${jokers.length} kaldı` : 'Hazırlanıyor…'}</span></div>
-        <div className="joker-buttons">{jokers.map(joker => {
-         const active = activeJokers.includes(joker.id);
-         const available = !!privateAnswer?.availableJokers.includes(joker.id);
-         const tooFewChoices = joker.id === 'fifty-fifty' && phase === 'open' && (state?.question.choices?.length || 0) <= 2;
-         const disabled = !connected || !privateAnswer || phase !== 'open' || choiceExpired || submitting || active || submitted || !!selectedChoices.length || !available || tooFewChoices;
-         const label = !privateAnswer ? 'Hazırlanıyor' : active ? revealed ? 'Bu soruda kullanıldı' : 'Aktif' : !available ? 'Kullanıldı' : tooFewChoices ? 'İki seçenek var' : '1 kullanım';
-         return <button key={joker.id} type="button" className={`joker-button ${joker.id === 'bomb' ? 'bomb-joker' : ''} ${active ? 'active' : ''} ${!available && privateAnswer && !active ? 'spent' : ''}`} disabled={disabled} aria-pressed={active} aria-label={`${joker.name}: ${joker.description} ${label}`} onClick={() => void useJoker(joker.id)}><span className="joker-symbol" aria-hidden="true">{joker.symbol}</span><b>{joker.name}</b><small>{label}</small><span className="joker-description">{joker.description}</span></button>;
-        })}</div>
-        <p>Her joker oyun boyunca bir kez. İlk cevabından önce birden fazla jokeri birlikte açabilirsin.</p>
-        {!!activeJokers.length && phase === 'open' && <div className="active-joker-notes" role="status">{choiceExpired ? <p>Cevap alımı kapandı. Sonuçlar açılıyor…</p> : <><p><b>Aktif: {activeJokers.map(jokerName).join(' + ')}</b></p>{activeJokers.map(joker => <p key={joker}>{joker === 'fifty-fifty' ? 'Yarı yarıya: Elenen seçenekleri yalnız sen görürsün.' : joker === 'double-answer' ? selectedChoices.length === 2 ? 'Çift cevap: İki seçimin de kaydedildi.' : selectedChoices.length === 1 ? 'Çift cevap: İlk seçimin kaydedildi; ikinci bir seçenek daha seçebilirsin.' : 'Çift cevap: İki farklı seçenek seçebilirsin.' : joker === 'double-points' ? '×2 puan: Doğru puanın ve rakiplerin yanlış cevap cezaları ikiye katlanır. Senin bomban kazanırsa bomba cezası da ×2 olur; Kalkan korur.' : joker === 'bomb' ? 'Bomba: Bomba kullananlar arasında ilk doğru cevap kazanır; diğer oyuncular soru cezasını alır. ×2 puan ve Çift cevap ile birlikte çalışır.' : 'Kalkan: Yanlış cevaptan korunursun. Başkasının bombası kazanırsa bu sorudan 0 puan alırsın.'}</p>)}</>}</div>}
-       </section>}
+    </section>);
+ const answerPanel = <section className="answers-column board-panel" aria-label="Cevaplar ve jokerler">
+  <div className="column-heading"><h2>Cevaplar</h2><span>{phase === 'countdown' ? `${countdown} saniye sonra` : phase === 'open' ? `${secs} sn` : phase === 'resolved' ? 'Sonuçlar açık' : phase === 'final' ? 'Oyun tamamlandı' : '30 soru · 5 joker'}</span></div>
+  <div className="answer-workspace">
        {multipleChoice && !['lobby', 'countdown'].includes(phase) && <section className="answer-options" aria-label="Cevap seçenekleri">
         <div className="answer-options-heading"><b>{activeJokers.includes('double-answer') ? `İki seçenek seç · ${selectedChoices.length} / 2` : 'Bir seçenek seç'}</b><span>{state?.submitted.length || 0} / {state?.players.length || 0} cevapladı</span></div>
         {state?.question.choices?.map((choice, index) => {
@@ -315,7 +291,20 @@ export default function Game() {
         })}
         <p role="status">{isHost ? revealed ? 'Sonuçlar açık; sonraki soruya geçebilirsin.' : choiceExpired ? 'Cevap alımı kapandı. Sonuçlar açılıyor…' : `Cevaplar ${MULTIPLE_CHOICE_SECONDS} saniyede, herkes tamamlayınca veya bomba patlayınca açılır; Next ile de açabilirsin.` : revealed ? 'Cevaplar açıldı. Sonuçları aşağıda görebilirsin.' : submitting ? 'İşlemin kaydediliyor…' : choiceExpired ? 'Cevap alımı kapandı. Sonuçlar açılıyor…' : activeJokers.includes('double-answer') && selectedChoices.length === 1 ? 'İlk seçimin kaydedildi. Süre dolmadan ikinci bir seçenek seçebilirsin.' : answerComplete ? 'Cevabın ve cevap süren kaydedildi. Sonuçları bekle.' : !me ? 'Bir seçenek seçerek oyuna katıl.' : 'İlk doğru cevap ×1,5 puan kazandırır. Tek cevap bonusu ×2 ve ×2 puan jokeriyle birleşebilir.'}</p>
        </section>}
-       {multipleChoice && revealed && <section className="choice-results" aria-label="Soru sonuçları"><h3>Bu sorunun sonuçları</h3>{bombResult && <p className="bomb-notice" role="status"><b><Zap size={16} />{bombWinner?.name || 'Oyuncu'} bombayı patlattı!</b><span>Kazanan dışındaki oyunculara, cevapları doğru olsa veya cevap vermemiş olsalar bile −{Math.round(current.penalty * current.multiplier) * (bombResult.jokers?.includes('double-points') ? 2 : 1)} puan uygulandı. Kazanan dışındaki Kalkan kullanıcıları bu sorudan 0 puan aldı.</span></p>}{state?.choiceResults.map(result => {
+  {['lobby', 'countdown'].includes(phase) && <div className="answers-waiting"><Gamepad2 size={28} /><h3>{phase === 'countdown' ? `${countdown}…` : 'Dört seçenek, tek yarış.'}</h3><p>{phase === 'countdown' ? 'Soru açılınca cevabını burada seç.' : 'Soru açıldığında cevaplar burada görünecek.'}</p></div>}
+       {multipleChoice && !isHost && me && !revealed && <section className="joker-tray" aria-label="Kişisel jokerlerin">
+        <div className="joker-heading"><h3><Sparkles size={16} />Jokerlerin</h3><span role="status">{privateAnswer ? `${activeJokers.length ? `${activeJokers.length} aktif · ` : ''}${privateAnswer.availableJokers.length} / ${jokers.length} kaldı` : 'Hazırlanıyor…'}</span></div>
+        <div className="joker-buttons">{jokers.map(joker => {
+         const active = activeJokers.includes(joker.id);
+         const available = !!privateAnswer?.availableJokers.includes(joker.id);
+         const tooFewChoices = joker.id === 'fifty-fifty' && phase === 'open' && (state?.question.choices?.length || 0) <= 2;
+         const disabled = !connected || !privateAnswer || phase !== 'open' || choiceExpired || submitting || active || submitted || !!selectedChoices.length || !available || tooFewChoices;
+         const label = !privateAnswer ? 'Hazırlanıyor' : active ? revealed ? 'Bu soruda kullanıldı' : 'Aktif' : !available ? 'Kullanıldı' : tooFewChoices ? 'İki seçenek var' : '1 kullanım';
+         return <JokerCard key={joker.id} joker={joker} label={label} active={active} spent={!available && !!privateAnswer && !active} disabled={disabled} onUse={() => void useJoker(joker.id)} />;
+        })}</div>
+       </section>}
+  </div>
+  {revealed && <div className="answer-results-scroll">       {multipleChoice && revealed && <section className="choice-results" aria-label="Soru sonuçları"><h3>Bu sorunun sonuçları</h3>{bombResult && <p className="bomb-notice" role="status"><b><Zap size={16} />{bombWinner?.name || 'Oyuncu'} bombayı patlattı!</b><span>Kazanan dışındaki oyunculara, cevapları doğru olsa veya cevap vermemiş olsalar bile −{Math.round(current.penalty * current.multiplier) * (bombResult.jokers?.includes('double-points') ? 2 : 1)} puan uygulandı. Kazanan dışındaki Kalkan kullanıcıları bu sorudan 0 puan aldı.</span></p>}{state?.choiceResults.map(result => {
         const player = state.players.find(p => p.id === result.id);
         const choiceIds = result.choiceIds || (result.choiceId ? [result.choiceId] : []);
         const choices = choiceIds.map(id => state.question.choices?.find(option => option.id === id)?.text).filter(Boolean);
@@ -325,28 +314,51 @@ export default function Game() {
         const resultClass = bombHit ? 'is-wrong bomb-hit' : bombShielded ? 'bomb-shielded' : result.correct === null ? 'unanswered' : result.correct ? 'is-correct' : 'is-wrong';
         return <div key={result.id} className={resultClass}><span aria-label={bombLabel || undefined}>{bombHit ? '✹' : bombShielded ? '◇' : result.correct === null ? '—' : result.correct ? '✓' : '✕'}</span><div><b>{player?.name || 'Oyuncu'}{result.id === pid ? ' (Sen)' : ''}</b><small>{choices.join(' / ') || 'Cevap vermedi'}{result.elapsedMs !== undefined && ` · ${(result.elapsedMs / 1000).toFixed(2)} sn`}</small>{(bombHit || bombShielded) && result.correct !== null && <small>{result.correct ? 'Doğru seçim' : 'Yanlış seçim'} · {bombShielded ? 'Kalkan sayesinde 0 puan' : 'normal puan yerine bomba cezası'}</small>}{(!!result.jokers?.length || result.firstCorrectBonus || result.soloBonus || result.bombOutcome || result.penaltyMultiplier === 2) && <div className="result-badges">{result.jokers?.map(joker => <span key={joker}>{jokerName(joker)}</span>)}{result.penaltyMultiplier === 2 && <span className="bomb-outcome hit">Ceza ×2</span>}{result.firstCorrectBonus && <span className="first-correct-bonus">İlk doğru · ×1,5</span>}{result.soloBonus && <span className="solo-bonus">Tek cevap · ×2</span>}{result.bombOutcome && <span className={`bomb-outcome ${result.bombOutcome}`}>{bombLabel}</span>}</div>}</div><strong>{result.delta > 0 ? '+' : ''}{result.delta}</strong></div>;
        })}{!state?.choiceResults.length && <p className="empty-copy">Bu soruya katılan oyuncu yok.</p>}</section>}
+</div>}
+     {isHost && multipleChoice && <div className="host-controls" aria-label="Sunucu oyun kontrolleri"><p className="control-hint">{phase === 'open' ? `${state?.submitted.length || 0} oyuncu cevapladı. Sonuçlar ${MULTIPLE_CHOICE_SECONDS} saniyede, herkes tamamlayınca veya bomba patlayınca açılır; Next ile de açabilirsin.` : revealed ? 'Sonuçlar açık. Hazır olduğunda devam et.' : 'Herkes aynı soruyu cevaplar.'}</p><button className="button primary" disabled={!connected || busy || phase === 'countdown'} onClick={() => phase === 'final' ? setModal('new') : phase === 'open' ? void revealAnswers() : void send('host:start')}>{phase === 'lobby' ? 'Oyunu başlat' : phase === 'open' ? 'Next · Cevapları göster' : phase === 'countdown' ? 'Soru hazırlanıyor…' : phase === 'final' ? 'Yeni tur' : state?.index === (state?.total || 0) - 1 ? 'Sonuçlar' : 'Sonraki soru'}<ArrowRight size={18} /></button></div>}
+ </section>;
+
+
+ return <div className={`app-shell ${isHost ? 'host-view' : 'player-view'} ${multipleChoice ? 'multiple-choice-mode' : ''} ${quiz ? 'quiz-mode' : ''}`}>
+  <div className="workspace" inert={!!modal}>
+   <header className="game-header">
+    <div className="wordmark">vigola<span>.</span></div>
+    <div className="header-room"><span className={`connection-dot ${connected ? 'online' : ''}`} /><span>{connected ? 'Oda' : 'Bağlanıyor'}</span><b>{state?.code || '••••••'}</b>{state && <span className="room-language" title="Soru dili">{state.language === 'tr' ? 'TR' : 'EN'}</span>}</div>
+    {me && <span className="header-score" title={me.name}>{me.name}<b>{me.score} <small>puan</small></b></span>}
+    <div className="header-actions">
+     <ThemeToggle />
+     {isHost && <button className="icon-button" aria-label="İzleyici ekranını aç" title="İzleyici ekranı" onClick={() => { if (state) window.open(`/?room=${state.code}&watch=1`, '_blank', 'noopener,noreferrer'); }}><ExternalLink size={20} /></button>}
+     <button className="icon-button" aria-label={muted ? 'Sesi aç' : 'Sesi kapat'} onClick={() => setMuted(!muted)}>{muted ? <VolumeX size={21} /> : <Volume2 size={21} />}</button>
+     {isHost && <><button className="button secondary header-edit" onClick={() => setModal('questions')}>Soruları düzenle</button><button className="button secondary" onClick={() => setModal('new')} aria-label="Yeni oyun"><Plus size={18} /><span>Yeni oyun</span></button><button className="button primary invite-button" disabled={!state} onClick={() => setModal('invite')}><Users size={18} /><span>Davet et</span></button></>}
+     {!isHost && <button className="icon-button" onClick={() => setModal('rules')} aria-label="Oyun kuralları"><CircleHelp size={21} /></button>}
+    </div>
+   </header>
+   <main className="live-board">
+    <div className="question-stack">
+    <section className="question-column board-panel" aria-label="Soru ve cevap akışı">
+     <div className="column-heading"><h1>{quiz ? QUIZ_CATEGORIES.find(category => category.id === state?.quizCategory)?.label || '30 Soru Yarışı' : 'Soru akışı'}</h1><span>{(state?.index || 0) + 1} / {state?.total || 24}</span></div>
+     <div className="question-scroll">
+      <article className="current-question">
+       <div className="question-kicker"><span className="question-letter">{quiz ? String((state?.index || 0) + 1).padStart(2, '0') : current.letter}</span><div><b>{current.category}</b><span>{phase === 'lobby' ? 'Soru bekleniyor' : phase === 'countdown' ? 'Soru hazırlanıyor' : 'Şu anki soru'}</span></div><span className="difficulty">{current.difficulty}</span></div>
+       <h2 lang={state?.language || 'tr'}>{phase === 'lobby' ? 'Ekibin hazır mı?' : phase === 'countdown' ? 'Sıradaki soru geliyor…' : questionText}</h2>
+       {phase === 'lobby' && <p className="game-message">{isHost ? 'Oyuncuları davet et, ardından oyunu başlat.' : multipleChoice ? `${MULTIPLE_CHOICE_SECONDS} saniyede seçimini yap. İlk doğru cevap ×1,5; beş jokerini birlikte kullanabilirsin.` : 'Soruyu gör, ilk sen bas, cevabı sesli söyle.'}</p>}
+       {!['lobby', 'countdown'].includes(phase) && <><div className="question-stakes">{multipleChoice && <span className="muted">Temel:</span>}<span className="green">+{Math.round(current.points * current.multiplier)} doğru{multipleChoice ? ' · hızına göre' : ''}</span><span className="red">−{Math.round(current.penalty * current.multiplier)} yanlış</span>{multipleChoice && <span className="question-bonuses">İlk doğru ×1,5 · Tek cevap ×2 · ×2 puan jokeriyle birleşir</span>}</div>{state?.question.code && <pre className="code-sample"><code>{state.question.code}</code></pre>}</>}
        {isHost && hostQuestion ? <div className="host-solution"><span><ShieldCheck size={14} />YALNIZCA SUNUCU GÖRÜR</span><strong>{hostQuestion.answer}</strong><p lang={state?.language || 'en'}>{hostQuestion.explanation}</p></div> : state?.question.answer && <div className="revealed-solution"><span><Check size={16} />Doğru cevap</span><strong>{state.question.answer}</strong><p lang={state.language}>{state.question.explanation}</p></div>}
       </article>
-      {!!state?.completed?.filter(entry => entry.index !== state.index).length && <h3 className="past-heading">Önceki sorular</h3>}
+      {!!state?.completed?.filter(entry => entry.index !== state.index).length && <details className="question-history" open={!multipleChoice}><summary>Önceki sorular · {state?.completed.filter(entry => entry.index !== state.index).length}</summary>
       {[...(state?.completed || [])].filter(entry => entry.index !== state?.index).reverse().map(entry => <article className="past-question" key={entry.index}><div><span className="question-letter">{quiz ? entry.index + 1 : entry.letter}</span><b>{entry.answer}</b><span className={entry.status === 'correct' ? 'green' : 'muted'}>{entry.status === 'correct' ? 'Bilindi' : multipleChoice ? 'Doğru yok' : 'Pas'}</span></div><p lang={state?.language || 'en'}>{entry.text}</p></article>)}
+      </details>}
      </div>
-     {isHost && multipleChoice && <div className="host-controls" aria-label="Sunucu oyun kontrolleri"><p className="control-hint">{phase === 'open' ? `${state?.submitted.length || 0} oyuncu cevapladı. Sonuçlar ${MULTIPLE_CHOICE_SECONDS} saniyede, herkes tamamlayınca veya bomba patlayınca açılır; Next ile de açabilirsin.` : revealed ? 'Sonuçlar açık. Hazır olduğunda devam et.' : 'Herkes aynı soruyu cevaplar.'}</p><button className="button primary" disabled={!connected || busy || phase === 'countdown'} onClick={() => phase === 'final' ? setModal('new') : phase === 'open' ? void revealAnswers() : void send('host:start')}>{phase === 'lobby' ? 'Oyunu başlat' : phase === 'open' ? 'Next · Cevapları göster' : phase === 'countdown' ? 'Soru hazırlanıyor…' : phase === 'final' ? 'Yeni tur' : state?.index === (state?.total || 0) - 1 ? 'Sonuçlar' : 'Sonraki soru'}<ArrowRight size={18} /></button></div>}
      {isHost && !multipleChoice && <div className="host-controls" aria-label="Sunucu oyun kontrolleri">
       <div className="judge-row"><button className="button correct-button" disabled={!connected || phase !== 'answering'} onClick={() => void judge(true)}><Check size={22} />Doğru<kbd>D</kbd></button><button className="button wrong-button" disabled={!connected || phase !== 'answering'} onClick={() => void judge(false)}><X size={22} />Yanlış<kbd>Y</kbd></button></div>
       <div className="advance-row"><button className="button secondary" disabled={!connected || !['open', 'answering'].includes(phase)} onClick={() => void send('host:pass')}>Pas geç<ChevronRight size={18} /></button><button className="button primary" disabled={!connected || !['lobby', 'resolved', 'final'].includes(phase)} onClick={() => phase === 'final' ? setModal('new') : void send('host:start')}>{phase === 'lobby' ? 'Oyunu başlat' : phase === 'final' ? 'Yeni tur' : state?.index === (state?.total || 0) - 1 ? 'Sonuçlar' : 'Sonraki harf'}<ArrowRight size={18} /></button></div>
      </div>}
     </section>
 
-    <section className="wheel-column" aria-label="Oyun alanı">
-     <div className="stage-top"><span>{quiz ? '30 SORU YARIŞI' : multipleChoice ? 'ÇOKTAN SEÇMELİ' : 'YAZILIM PASSAPAROLASI'}</span><span className={`round-status ${phase}`}><i />{phase === 'lobby' ? 'Lobi' : phase === 'countdown' ? 'Hazır ol' : phase === 'answering' ? 'Cevap zamanı' : phase === 'resolved' ? 'Tamamlandı' : phase === 'final' ? 'Final' : multipleChoice ? 'Cevaplar alınıyor' : 'Buzzer açık'}</span></div>
-     {phase === 'final' ? <div className="final-stage"><Trophy className="final-trophy" size={48} /><h2>{sorted.length ? `${sorted[0].name} kazandı!` : 'Oyun tamamlandı'}</h2><p className="game-message">Her harfte biraz daha öğrendik.</p><div className="podium">{sorted.slice(0, 3).map((p, i) => <div className={`podium-place place-${i}`} key={p.id}><Avatar player={p} /><b>{p.name}</b><span>{p.score} puan</span><div>{i + 1}</div></div>)}</div></div> : quiz ? <QuizStage index={state?.index || 0} total={state?.total || QUIZ_QUESTION_COUNT} history={state?.history || []} phase={phase} seconds={secs} countdown={countdown} /> : <GameWheel letters={liveLetters} letter={current.letter} history={state?.history || []} phase={phase} seconds={secs} countdown={countdown} multipleChoice={multipleChoice} />}
-     <div className="turn-status" role="status" aria-live="polite">
-      {multipleChoice ? phase === 'lobby' ? 'Herkes hazırsa başlayalım.' : phase === 'countdown' ? 'Soruyu okumaya hazırlan.' : phase === 'final' ? 'Alkışlar bütün ekibe!' : revealed ? 'Cevaplar ve puanlar açık.' : activeJokers.includes('double-answer') && selectedChoices.length === 1 && !choiceExpired ? 'İkinci seçimini yapabilirsin.' : submitted ? 'Cevabın kaydedildi.' : 'Seçimini yap.' : phase === 'answering' ? <><AudioLines size={22} /><b>{head?.id === pid ? 'Söz sende!' : `${head?.name || 'Oyuncu'} cevaplıyor`}</b></> : phase === 'countdown' ? 'Parmaklar butonlarda…' : phase === 'lobby' ? 'Herkes hazırsa başlayalım.' : phase === 'resolved' ? state?.result?.correct ? `${state.players.find(p => p.id === state.result?.id)?.name || 'Oyuncu'} doğru bildi!` : 'Bu harfi pas geçtik.' : phase === 'final' ? 'Alkışlar bütün ekibe!' : state?.pending ? 'İlk basan belirleniyor…' : 'Biliyorsan, bas!'}
-     </div>
-     {multipleChoice && <div className="buzz-queue submission-summary"><div className="queue-title"><CheckCheck size={16} /><h2>Cevap durumu</h2><span>{state?.submitted.length || 0} / {state?.players.length || 0}</span></div><div className="submission-players">{state?.players.map(player => <span key={player.id} className={state.submitted.includes(player.id) ? 'has-answered' : ''}>{state.submitted.includes(player.id) ? '✓' : '·'} {player.name}</span>)}</div><p>{revealed ? 'Puan tablosu güncellendi.' : 'Seçimler herkes tamamlayınca, süre dolunca, bomba patlayınca veya Next ile görünür.'}</p></div>}
-     {!multipleChoice && <div className="buzz-queue"><div className="queue-title"><Zap size={16} /><h2>Basış sırası</h2><span>{state?.queue.length || 0}</span></div>{state?.queue.length ? <div className="queue-entries">{state.queue.map((entry, index) => { const p = state.players.find(p => p.id === entry.id); return p && <div className={index === 0 ? 'on-mic' : ''} key={entry.id}><span>{index + 1}</span><Avatar player={p} small /><b>{p.name}</b><small>{index === 0 ? 'Cevaplıyor' : 'Bekliyor'}</small></div>; })}</div> : <p>{state?.pending ? 'Basışlar alınıyor…' : 'Henüz basan yok.'}</p>}</div>}
-
-    </section>
+    {multipleChoice && progressPanel}
+    </div>
+    {multipleChoice && answerPanel}
+    {!multipleChoice && progressPanel}
 
     <aside className="people-column board-panel" aria-label="Puanlar, izleyiciler ve buzzer">
      <section className="leaderboard"><div className="column-heading"><h2><Trophy size={18} />Puan tablosu</h2><span>{sorted.length} oyuncu</span></div><div className="score-list">{sorted.length ? sorted.map((p, index) => <div key={p.id} className={p.id === pid ? 'is-me' : ''}><span className="rank">{index + 1}</span><Avatar player={p} /><b>{p.name}<small><i className={p.connected ? 'online' : ''} />{p.id === pid ? 'Sen' : p.connected ? 'Oyunda' : 'Bağlantısı kesildi'}</small></b><strong>{p.score}</strong></div>) : <p className="empty-copy">İlk oyuncu bekleniyor.</p>}</div></section>
