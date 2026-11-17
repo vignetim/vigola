@@ -24,13 +24,13 @@ function setup(pool = bank) {
  return { engine, room, ada, ece, advance, elapse, open, use, answer, reveal };
 }
 
-test('every MC player receives a separate private inventory of four once-per-game jokers', () => {
+test('every MC player receives a separate private inventory of five once-per-game jokers', () => {
  const { engine, room, ada, ece } = setup();
  assert.deepEqual(engine.playerAnswer(room, ada).availableJokers, JOKERS);
  const privateState = engine.playerAnswer(room, ada);
  privateState.availableJokers.pop();
- assert.equal(ada.availableJokers.size, 4);
- assert.equal(ece.availableJokers.size, 4);
+ assert.equal(ada.availableJokers.size, 5);
+ assert.equal(ece.availableJokers.size, 5);
  assert.equal(engine.playerAnswer(room, ada).choiceId, null);
  assert.deepEqual(engine.playerAnswer(room, ada).choiceIds, []);
  assert.equal(JSON.stringify(engine.state(room)).includes('availableJokers'), false);
@@ -54,7 +54,7 @@ test('joker actions reject invalid, early, stale, late, and foreign-player reque
  assert.throws(() => engine.useJoker(room, foreign, room.bank[0].id, 'shield'), /katıl/);
  elapse(MULTIPLE_CHOICE_SECONDS * 1000);
  assert.throws(() => use('shield'), /süresi doldu/);
- assert.equal(ada.availableJokers.size, 4); assert.equal(room.roundJokers.size, 0);
+ assert.equal(ada.availableJokers.size, 5); assert.equal(room.roundJokers.size, 0);
 });
 
 test('one joker per question, only before answering, and spent jokers never return on next question', () => {
@@ -62,16 +62,16 @@ test('one joker per question, only before answering, and spent jokers never retu
  open(); use('shield');
  assert.throws(() => use('double-answer'), /yalnızca bir/);
  assert.throws(() => use('shield'), /yalnızca bir/);
- assert.equal(ada.availableJokers.size, 3);
+ assert.equal(ada.availableJokers.size, 4);
  answer('wrong-one', ece);
  assert.throws(() => use('double-answer', ece), /cevap vermeden önce/);
- assert.equal(ece.availableJokers.size, 4);
+ assert.equal(ece.availableJokers.size, 5);
  reveal(); open();
  assert.equal(room.roundJokers.size, 0);
- assert.equal(ada.availableJokers.size, 3);
+ assert.equal(ada.availableJokers.size, 4);
  assert.throws(() => use('shield'), /zaten kullandın/);
  assert.equal(use('double-answer'), true);
- assert.equal(ada.availableJokers.size, 2);
+ assert.equal(ada.availableJokers.size, 3);
  assert.equal(engine.playerAnswer(room, ece).joker, null);
 });
 
@@ -225,7 +225,7 @@ test('next question clears current joker and choices but preserves spent invento
  const own = engine.playerAnswer(room, ada);
  assert.deepEqual(own.choiceIds, []); assert.equal(own.joker, null);
  assert.deepEqual(own.eliminatedChoiceIds, []);
- assert.deepEqual(own.availableJokers, ['fifty-fifty', 'shield', 'double-points']);
+ assert.deepEqual(own.availableJokers, ['fifty-fifty', 'shield', 'double-points', 'bomb']);
  assert.deepEqual(engine.state(room).completed[0].choiceResults, previous);
  assert.throws(() => use('double-answer'), /zaten kullandın/);
 });
